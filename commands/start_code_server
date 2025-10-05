@@ -74,6 +74,8 @@ fi
 binary=""
 if [[ -x /code-server/bin/code-server ]]; then
   binary=/code-server/bin/code-server
+elif [[ -x /tmp/code-server/bin/code-server ]]; then
+  binary=/tmp/code-server/bin/code-server
 elif has_cmd code-server; then
   binary=$(command -v code-server)
 else
