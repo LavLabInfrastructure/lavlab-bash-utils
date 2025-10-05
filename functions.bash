@@ -223,7 +223,10 @@ pkg_install() {
       apt-get update -q
         __BASH_UTILS_APT_UPDATED=1
       fi
-      DEBIAN_FRONTEND=noninteractive apt-get install -y -q "${packages[@]}"
+      DEBIAN_FRONTEND=noninteractive apt-get install -y -q \
+        -o Dpkg::Options::="--force-confold" \
+        -o Dpkg::Options::="--force-confdef" \
+        "${packages[@]}"
       ;;
     dnf)
       dnf install -y "${packages[@]}"
