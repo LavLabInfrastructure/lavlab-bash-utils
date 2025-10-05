@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+# shellcheck source=../functions.bash
+source "${SCRIPT_ROOT}/functions.bash"
+
+usage() {
+  cat <<'EOF'
+Usage: ensure_user [options]
+
+Creates or updates a user account with optional UID/GID and home settings.
+
+Options:
+  --name=NAME        Username to ensure (required).
+  --uid=UID          UID to assign when creating the user.
+  --gid=GID          GID to assign; creates the group if missing.
+  --home=DIR         Home directory path.
+  --shell=PATH       Login shell (default: /bin/bash).
+  --no-create-home   Do not create a home directory.
+  --remove-uid=UID   Remove any existing user with the given UID before creation.
+  --remove-gid=GID   Remove any existing group with the given GID before creation.
+  --force            Re-run even if a marker is present.
+  --verbose          Enable debug logging.
+  -h, --help         Show this help message.
+EOF
+}
+
+name=""
+uid=""
+gid=""
+home=""
+shell="/bin/bash"
+create_home=1
+remove_uid=""
+remove_gid=""
+force=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --name=*) name=${1#*=}; shift ;;
+    --name)
+      shift
+      [[ $# -gt 0 ]] || die "--name requires a value"
+      name=$1
+      shift
+      ;;
+    --uid=*) uid=${1#*=}; shift ;;
+    --uid)
+      shift
+      [[ $# -gt 0 ]] || die "--uid requires a value"
+      uid=$1
+      shift
+      ;;
+    --gid=*) gid=${1#*=}; shift ;;
+    --gid)
+      shift
+      [[ $# -gt 0 ]] || die "--gid requires a value"
+      gid=$1
+      shift
+      ;;
+    --home=*) home=${1#*=}; shift ;;
+    --home)
+      shift
+      [[ $# -gt 0 ]] || die "--home requires a value"
+      home=$1
+      shift
+      ;;
+    --shell=*) shell=${1#*=}; shift ;;
+    --shell)
+      shift
+      [[ $# -gt 0 ]] || die "--shell requires a value"
+      shell=$1
+      shift
+      ;;
+    --no-create-home) create_home=0; shift ;;
+    --remove-uid=*) remove_uid=${1#*=}; shift ;;
+    --remove-uid)
+      shift
+      [[ $# -gt 0 ]] || die "--remove-uid requires a value"
+      remove_uid=$1
+      shift
+      ;;
+    --remove-gid=*) remove_gid=${1#*=}; shift ;;
+    --remove-gid)
+      shift
+      [[ $# -gt 0 ]] || die "--remove-gid requires a value"
+      remove_gid=$1
+      shift
+      ;;
+    --force|-f) force=1; shift ;;
+    --verbose) BASH_UTILS_VERBOSE=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) die "Unknown option: $1" ;;
+    *) break ;;
+  esac
+done
+
+[[ -n "$name" ]] || { usage >&2; exit 1; }
+
+marker_name="ensure_user"
+marker_version="1"
+scope="user_${name}"
+[[ -n "$uid" ]] && scope+="_uid_${uid}"
+[[ -n "$gid" ]] && scope+="_gid_${gid}"
+[[ -n "$home" ]] && scope+="_home_${home}"
+[[ $create_home -eq 0 ]] && scope+="_nohome"
+[[ -n "$remove_uid" ]] && scope+="_rmuid_${remove_uid}"
+[[ -n "$remove_gid" ]] && scope+="_rmgid_${remove_gid}"
+scope+="_shell_${shell}"
+
+if coder_marker_should_run "$marker_name" "$marker_version" "/root" "$scope" "$force"; then
+  [[ -n "$remove_gid" ]] && remove_group_by_gid "$remove_gid"
+  [[ -n "$remove_uid" ]] && remove_user_by_uid "$remove_uid"
+
+  args=(--name "$name" --shell "$shell")
+  [[ -n "$uid" ]] && args+=(--uid "$uid")
+  [[ -n "$gid" ]] && args+=(--gid "$gid")
+  [[ -n "$home" ]] && args+=(--home "$home")
+  [[ $create_home -eq 0 ]] && args+=(--no-create-home)
+
+  ensure_user "${args[@]}"
+
+  coder_marker_write "$marker_name" "$marker_version" "/root" "$scope" >/dev/null
+  log_info "User $name ensured"
+else
+  marker=$(coder_marker_path "$marker_name" "$marker_version" "/root" "$scope")
+  log_info "User $name already ensured (marker $marker); skipping"
+fi

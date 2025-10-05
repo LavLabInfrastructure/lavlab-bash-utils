@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+# shellcheck source=../functions.bash
+source "${SCRIPT_ROOT}/functions.bash"
+
+usage() {
+  cat <<'EOF'
+Usage: start_code_server [options]
+
+Start code-server for a user if it is not already running.
+
+Options:
+  --user=NAME        Target user (default: coder).
+  --port=PORT        Port to listen on (default: 13337).
+  --log-file=PATH    Log file path (default: /tmp/code-server.log).
+  --auth=MODE        Authentication mode (default: none).
+  --force            Restart even if already running.
+  --verbose          Enable debug logging.
+  -h, --help         Show this help message.
+EOF
+}
+
+user="coder"
+port=13337
+log_file="/tmp/code-server.log"
+auth="none"
+force=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --user=*) user=${1#*=}; shift ;;
+    --user)
+      shift
+      [[ $# -gt 0 ]] || die "--user requires a value"
+      user=$1
+      shift
+      ;;
+    --port=*) port=${1#*=}; shift ;;
+    --port)
+      shift
+      [[ $# -gt 0 ]] || die "--port requires a value"
+      port=$1
+      shift
+      ;;
+    --log-file=*) log_file=${1#*=}; shift ;;
+    --log-file)
+      shift
+      [[ $# -gt 0 ]] || die "--log-file requires a value"
+      log_file=$1
+      shift
+      ;;
+    --auth=*) auth=${1#*=}; shift ;;
+    --auth)
+      shift
+      [[ $# -gt 0 ]] || die "--auth requires a value"
+      auth=$1
+      shift
+      ;;
+    --force|-f) force=1; shift ;;
+    --verbose) BASH_UTILS_VERBOSE=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) die "Unknown option: $1" ;;
+    *) break ;;
+  esac
+done
+
+if ! id "$user" >/dev/null 2>&1; then
+  die "User $user does not exist"
+fi
+
+binary=""
+if [[ -x /code-server/bin/code-server ]]; then
+  binary=/code-server/bin/code-server
+elif has_cmd code-server; then
+  binary=$(command -v code-server)
+else
+  die "code-server binary not found"
+fi
+
+home=$(user_home "$user")
+marker_name="start_code_server"
+marker_version="1"
+scope="port_${port}_auth_${auth}_binary_${binary}"
+
+running=0
+if pgrep -u "$user" -f "code-server.*--port[[:space:]]*$port" >/dev/null 2>&1; then
+  running=1
+fi
+
+should_run=1
+if coder_marker_should_run "$marker_name" "$marker_version" "$home" "$scope" "$force"; then
+  should_run=1
+else
+  should_run=0
+fi
+
+if [[ $force -eq 0 && $running -eq 1 && $should_run -eq 0 ]]; then
+  marker=$(coder_marker_path "$marker_name" "$marker_version" "$home" "$scope")
+  log_info "code-server already running for $user on port $port (marker $marker); skipping"
+  exit 0
+fi
+
+if [[ $running -eq 1 && $force -eq 1 ]]; then
+  pkill -u "$user" -f "code-server.*--port[[:space:]]*$port" || true
+  sleep 1
+fi
+
+log_info "Starting code-server for $user on port $port"
+mkdir -p "$(dirname "$log_file")"
+
+cmd=("$binary" "--auth" "$auth" "--port" "$port")
+
+(
+  run_as_user "$user" "${cmd[@]}" >>"$log_file" 2>&1 &
+) || die "Failed to launch code-server"
+
+coder_marker_write "$marker_name" "$marker_version" "$home" "$scope" "$user" >/dev/null
+log_info "code-server launch initiated (log: $log_file)"

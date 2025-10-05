@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+# shellcheck source=../functions.bash
+source "${SCRIPT_ROOT}/functions.bash"
+
+usage() {
+  cat <<'EOF'
+Usage: init_home [options] <username>
+
+Initializes a user's home directory skeleton and sets ownership.
+
+Options:
+  --verbose          Enable debug logging.
+  --force            Re-run even if a marker is present.
+  -h, --help         Show this help message.
+EOF
+}
+
+force=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --verbose) BASH_UTILS_VERBOSE=1; shift ;;
+    --force|-f) force=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) die "Unknown option: $1" ;;
+    *) break ;;
+  esac
+done
+
+[[ $# -ge 1 ]] || { usage >&2; exit 1; }
+username=$1
+
+if ! id "$username" >/dev/null 2>&1; then
+  die "User $username does not exist"
+fi
+
+home=$(user_home "$username")
+marker_name="init_home"
+marker_version="1"
+scope="$username"
+
+if coder_marker_should_run "$marker_name" "$marker_version" "$home" "$scope" "$force"; then
+  ensure_home_skeleton "$username"
+  coder_marker_write "$marker_name" "$marker_version" "$home" "$scope" "$username" >/dev/null
+  log_info "Initialized home for $username"
+else
+  marker=$(coder_marker_path "$marker_name" "$marker_version" "$home" "$scope")
+  log_info "Home for $username already initialized (marker $marker); skipping"
+fi

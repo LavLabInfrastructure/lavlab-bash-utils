@@ -1,0 +1,77 @@
+#!/bin/bash
+# setup_vscode - Configure VS Code settings and extensions for a user
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+# shellcheck source=../functions.bash
+source "$SCRIPT_DIR/../functions.bash"
+
+usage() {
+  cat <<EOF
+Usage: $0 [--force] <username> [extension...]
+
+Configure VS Code settings and install extensions for the specified user.
+
+Options:
+  --force, -f       Re-run even if a marker is present.
+
+Arguments:
+  username          Target user
+  extension         Optional VS Code extension IDs to install
+
+Examples:
+  $0 coder
+  $0 coder ms-python.python ms-toolsai.jupyter
+  $0 --force developer github.copilot eamodio.gitlens
+EOF
+  exit 1
+}
+
+main() {
+  require_root
+
+  local force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force|-f) force=1; shift ;;
+      -h|--help) usage ;;
+      --) shift; break ;;
+      -*) die "Unknown option: $1" ;;
+      *) break ;;
+    esac
+  done
+
+  [[ $# -lt 1 ]] && usage
+
+  local username=$1
+  shift
+  local extensions=("$@")
+  local home
+  home=$(user_home "$username")
+
+  local marker_name="setup_vscode"
+  local marker_version="1"
+  local scope="$username"
+  if [[ ${#extensions[@]} -gt 0 ]]; then
+    scope+="__${extensions[*]}"
+  fi
+
+  if coder_marker_should_run "$marker_name" "$marker_version" "$home" "$scope" "$force"; then
+    log_info "Setting up VS Code for $username"
+
+    write_vscode_settings "$username"
+
+    if [[ ${#extensions[@]} -gt 0 ]]; then
+      install_vscode_extensions "$username" "${extensions[@]}"
+    fi
+
+    coder_marker_write "$marker_name" "$marker_version" "$home" "$scope" "$username" >/dev/null
+
+    log_info "VS Code setup complete for $username"
+  else
+    local marker
+    marker=$(coder_marker_path "$marker_name" "$marker_version" "$home" "$scope")
+    log_info "VS Code already configured for $username (marker $marker); skipping"
+  fi
+}
+
+main "$@"

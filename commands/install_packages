@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+# shellcheck source=../functions.bash
+source "${SCRIPT_ROOT}/functions.bash"
+
+usage() {
+  cat <<'EOF'
+Usage: install_packages [--force] package [...]
+
+Install one or more packages using the platform package manager.
+
+Options:
+  --force            Re-run even if a marker is present.
+  --verbose          Enable debug logging.
+  -h, --help         Show this help message.
+EOF
+}
+
+force=0
+packages=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --force|-f) force=1; shift ;;
+    --verbose) BASH_UTILS_VERBOSE=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) die "Unknown option: $1" ;;
+    *) packages+=("$1"); shift ;;
+  esac
+fi
+
+packages+=("$@")
+[[ ${#packages[@]} -gt 0 ]] || { usage >&2; exit 1; }
+
+marker_name="install_packages"
+marker_version="1"
+# sort packages for deterministic scope
+IFS=$'\n' read -r -d '' sorted <<<"$(printf '%s\n' "${packages[@]}" | sort -u)" || true
+scope="${sorted//\n/_}"
+
+if coder_marker_should_run "$marker_name" "$marker_version" "/root" "$scope" "$force"; then
+  pkg_install "${packages[@]}"
+  coder_marker_write "$marker_name" "$marker_version" "/root" "$scope" >/dev/null
+  log_info "Packages ensured: ${packages[*]}"
+else
+  marker=$(coder_marker_path "$marker_name" "$marker_version" "/root" "$scope")
+  log_info "Packages already ensured (marker $marker); skipping"
+fi

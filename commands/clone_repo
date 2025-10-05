@@ -1,0 +1,117 @@
+#!/bin/bash
+# clone_repo - Clone or update a git repository
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+# shellcheck source=../functions.bash
+source "$SCRIPT_DIR/../functions.bash"
+
+usage() {
+  cat <<EOF
+Usage: $0 --repo-url <url> --target-dir <path> [options]
+
+Clone or update a git repository with optional authentication.
+
+Required:
+  --repo-url <url>        Repository URL (https://...)
+  --target-dir <path>     Target directory path
+
+Optional:
+  --branch <name>         Branch name (default: main)
+  --token <token>         Git authentication token
+  --username <user>       Git username (default: oauth2)
+  --force, -f             Re-run as initial setup (clears marker)
+
+Examples:
+  $0 --repo-url https://github.com/user/repo.git --target-dir /opt/repo
+  $0 --repo-url https://github.com/user/repo.git --target-dir /home/coder/project --branch develop --token \$GIT_TOKEN
+EOF
+  exit 1
+}
+
+main() {
+  require_root
+  local force=0
+  local args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force|-f)
+        force=1
+        shift
+        ;;
+      --force=*|-f=*)
+        force=1
+        shift
+        ;;
+      --repo-url|--branch|--target-dir|--token|--username)
+        [[ $# -ge 2 ]] || die "$1 requires a value"
+        args+=("$1" "$2")
+        shift 2
+        ;;
+      --repo-url=*|--branch=*|--target-dir=*|--token=*|--username=*)
+        args+=("${1%%=*}" "${1#*=}")
+        shift
+        ;;
+      --)
+        shift
+        args+=("$@")
+        break
+        ;;
+      -h|--help)
+        usage
+        ;;
+      -*)
+        die "Unknown option: $1"
+        ;;
+      *)
+        args+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  (( ${#args[@]} < 4 )) && usage
+
+  local repo_url=""
+  local target_dir=""
+  local branch=""
+  local token=""
+  local username=""
+
+  for ((i=0; i<${#args[@]}; i+=2)); do
+    case "${args[i]}" in
+      --repo-url) repo_url=${args[i+1]} ;;
+      --target-dir) target_dir=${args[i+1]} ;;
+      --branch) branch=${args[i+1]} ;;
+      --token) token=${args[i+1]} ;;
+      --username) username=${args[i+1]} ;;
+      *) : ;;
+    esac
+  done
+
+  [[ -n "$repo_url" ]] || die "--repo-url is required"
+  [[ -n "$target_dir" ]] || die "--target-dir is required"
+  branch=${branch:-main}
+
+  local home
+  home=$(cd "$(dirname "$target_dir")" && pwd -P)
+  local marker_name="clone_repo"
+  local marker_version="1"
+  local scope="${repo_url}_${target_dir}_${branch}_${username}_token_$([[ -n "$token" ]] && echo present || echo none)"
+
+  local run_mode="initial"
+  if ! coder_marker_should_run "$marker_name" "$marker_version" "$home" "$scope" "$force"; then
+    run_mode="refresh"
+  fi
+
+  clone_or_update_repo "${args[@]}"
+  coder_marker_write "$marker_name" "$marker_version" "$home" "$scope" >/dev/null
+
+  if [[ $run_mode == "initial" ]]; then
+    log_info "Repository cloned to $target_dir"
+  else
+    marker=$(coder_marker_path "$marker_name" "$marker_version" "$home" "$scope")
+    log_info "Repository refreshed at $target_dir (marker $marker)"
+  fi
+}
+
+main "$@"

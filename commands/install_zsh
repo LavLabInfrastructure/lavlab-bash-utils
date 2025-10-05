@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+# shellcheck source=../functions.bash
+source "${SCRIPT_ROOT}/functions.bash"
+
+usage() {
+  cat <<'EOF'
+Usage: install_zsh [options] <username>
+
+Installs zsh for the specified user and configures their shell profile.
+
+Options:
+  --theme=NAME       Zsh theme name to apply (default: eastwood).
+  --oh-my-zsh        Use oh-my-zsh and install it if missing.
+  --create           Create the user if they do not exist.
+  --uid=UID          UID to use when creating the user.
+  --gid=GID          GID to use when creating the user.
+  --home=DIR         Home directory when creating the user.
+  --shell=PATH       Shell to assign prior to switching to zsh (default /bin/bash).
+  --force            Re-run even if a marker is present.
+  --verbose          Enable debug logging.
+  -h, --help         Show this help message.
+EOF
+}
+
+theme="eastwood"
+use_oh_my=0
+create_user=0
+uid=""
+gid=""
+home=""
+default_shell="/bin/bash"
+force=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --theme=*) theme=${1#*=}; shift ;;
+    --theme)
+      shift
+      [[ $# -gt 0 ]] || die "--theme requires a value"
+      theme=$1
+      shift
+      ;;
+    --oh-my-zsh) use_oh_my=1; shift ;;
+    --create) create_user=1; shift ;;
+    --uid=*) uid=${1#*=}; shift ;;
+    --uid)
+      shift
+      [[ $# -gt 0 ]] || die "--uid requires a value"
+      uid=$1
+      shift
+      ;;
+    --gid=*) gid=${1#*=}; shift ;;
+    --gid)
+      shift
+      [[ $# -gt 0 ]] || die "--gid requires a value"
+      gid=$1
+      shift
+      ;;
+    --home=*) home=${1#*=}; shift ;;
+    --home)
+      shift
+      [[ $# -gt 0 ]] || die "--home requires a value"
+      home=$1
+      shift
+      ;;
+    --shell=*) default_shell=${1#*=}; shift ;;
+    --shell)
+      shift
+      [[ $# -gt 0 ]] || die "--shell requires a value"
+      default_shell=$1
+      shift
+      ;;
+    --force|-f) force=1; shift ;;
+    --verbose) BASH_UTILS_VERBOSE=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) die "Unknown option: $1" ;;
+    *) break ;;
+  esac
+done
+
+[[ $# -ge 1 ]] || { usage >&2; exit 1; }
+username=$1
+shift || true
+
+marker_name="install_zsh"
+marker_version="1"
+scope="user_${username}_theme_${theme}"
+[[ $use_oh_my -eq 1 ]] && scope+="_ohmy"
+[[ $create_user -eq 1 ]] && scope+="_create"
+[[ -n "$uid" ]] && scope+="_uid_${uid}"
+[[ -n "$gid" ]] && scope+="_gid_${gid}"
+[[ -n "$home" ]] && scope+="_home_${home}"
+
+if coder_marker_should_run "$marker_name" "$marker_version" "/root" "$scope" "$force"; then
+  if [[ $create_user -eq 1 ]]; then
+    ensure_user_args=(--name "$username" --shell "$default_shell")
+    [[ -n "$uid" ]] && ensure_user_args+=(--uid "$uid")
+    [[ -n "$gid" ]] && ensure_user_args+=(--gid "$gid")
+    [[ -n "$home" ]] && ensure_user_args+=(--home "$home")
+    ensure_user "${ensure_user_args[@]}"
+  fi
+
+  if ! id "$username" >/dev/null 2>&1; then
+    die "User $username does not exist. Use --create to create it first."
+  fi
+
+  style=$([[ $use_oh_my -eq 1 ]] && printf 'oh-my' || printf 'minimal')
+  install_zsh_for_user "$username" "$theme" "$style"
+
+  user_home_dir=$(user_home "$username")
+  coder_marker_write "$marker_name" "$marker_version" "$user_home_dir" "$scope" "$username" >/dev/null
+  log_info "zsh installed for $username"
+else
+  user_home_dir=$(user_home "$username" 2>/dev/null || echo "/root")
+  marker=$(coder_marker_path "$marker_name" "$marker_version" "$user_home_dir" "$scope")
+  log_info "zsh already configured for $username (marker $marker); skipping"
+fi

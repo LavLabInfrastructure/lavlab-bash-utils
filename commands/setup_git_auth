@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+# shellcheck source=../functions.bash
+source "${SCRIPT_ROOT}/functions.bash"
+
+usage() {
+  cat <<'EOF'
+Usage: setup_git_auth [options]
+
+Configures Git identity and GitHub credentials for a user.
+
+Options:
+  --user=NAME        System username to configure (required).
+  --git-name=NAME    Git author name.
+  --git-email=EMAIL  Git author email.
+  --token=TOKEN      GitHub personal access token.
+  --github-user=USER GitHub username (defaults to --user).
+  --skip-gitconfig   Do not write ~/.gitconfig (only credentials).
+  --force            Re-run even if a marker is present.
+  --verbose          Enable debug logging.
+  -h, --help         Show this help message.
+EOF
+}
+
+user=""
+git_name=""
+git_email=""
+token=""
+github_user=""
+skip_gitconfig=0
+force=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --user=*) user=${1#*=}; shift ;;
+    --user)
+      shift
+      [[ $# -gt 0 ]] || die "--user requires a value"
+      user=$1
+      shift
+      ;;
+    --git-name=*) git_name=${1#*=}; shift ;;
+    --git-name)
+      shift
+      [[ $# -gt 0 ]] || die "--git-name requires a value"
+      git_name=$1
+      shift
+      ;;
+    --git-email=*) git_email=${1#*=}; shift ;;
+    --git-email)
+      shift
+      [[ $# -gt 0 ]] || die "--git-email requires a value"
+      git_email=$1
+      shift
+      ;;
+    --token=*) token=${1#*=}; shift ;;
+    --token)
+      shift
+      [[ $# -gt 0 ]] || die "--token requires a value"
+      token=$1
+      shift
+      ;;
+    --github-user=*) github_user=${1#*=}; shift ;;
+    --github-user)
+      shift
+      [[ $# -gt 0 ]] || die "--github-user requires a value"
+      github_user=$1
+      shift
+      ;;
+    --skip-gitconfig) skip_gitconfig=1; shift ;;
+    --force|-f) force=1; shift ;;
+    --verbose) BASH_UTILS_VERBOSE=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) die "Unknown option: $1" ;;
+    *) break ;;
+  esac
+done
+
+[[ -n "$user" ]] || { usage >&2; exit 1; }
+
+if ! id "$user" >/dev/null 2>&1; then
+  die "User $user does not exist"
+fi
+
+home=$(user_home "$user")
+marker_name="setup_git_auth"
+marker_version="1"
+scope="user_${user}_skip_${skip_gitconfig}_gh_${github_user:-$user}_token_$([[ -n "$token" ]] && echo present || echo none)"
+[[ $skip_gitconfig -eq 0 ]] && scope+="_name_${git_name}_email_${git_email}"
+
+if coder_marker_should_run "$marker_name" "$marker_version" "$home" "$scope" "$force"; then
+  if [[ $skip_gitconfig -eq 0 ]]; then
+    [[ -n "$git_name" ]] || die "--git-name is required unless --skip-gitconfig is set"
+    [[ -n "$git_email" ]] || die "--git-email is required unless --skip-gitconfig is set"
+    write_git_config "$user" "$git_name" "$git_email"
+  fi
+
+  if [[ -n "$token" ]]; then
+    setup_git_credentials "$user" "$token" "${github_user:-$user}"
+    log_info "Git credentials configured for $user"
+  else
+    log_warn "No token provided; skipping credential helper setup"
+  fi
+
+  coder_marker_write "$marker_name" "$marker_version" "$home" "$scope" "$user" >/dev/null
+else
+  marker=$(coder_marker_path "$marker_name" "$marker_version" "$home" "$scope")
+  log_info "Git auth already configured for $user (marker $marker); skipping"
+fi

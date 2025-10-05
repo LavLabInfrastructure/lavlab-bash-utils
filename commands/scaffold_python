@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+# shellcheck source=../functions.bash
+source "${SCRIPT_ROOT}/functions.bash"
+
+usage() {
+  cat <<'EOF'
+Usage: scaffold_python [options]
+
+Creates a minimal Python project scaffold.
+
+Options:
+  --path=DIR         Target directory for the scaffold (required).
+  --name=NAME        Project display name (default: Workspace Project).
+  --force            Re-run even if a marker is present.
+  --verbose          Enable debug logging.
+  -h, --help         Show this help message.
+EOF
+}
+
+target=""
+project_name="Workspace Project"
+force=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --path=*) target=${1#*=}; shift ;;
+    --path)
+      shift
+      [[ $# -gt 0 ]] || die "--path requires a value"
+      target=$1
+      shift
+      ;;
+    --name=*) project_name=${1#*=}; shift ;;
+    --name)
+      shift
+      [[ $# -gt 0 ]] || die "--name requires a value"
+      project_name=$1
+      shift
+      ;;
+    --force|-f) force=1; shift ;;
+    --verbose) BASH_UTILS_VERBOSE=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) die "Unknown option: $1" ;;
+    *) break ;;
+  esac
+done
+
+[[ -n "$target" ]] || { usage >&2; exit 1; }
+
+marker_name="scaffold_python"
+marker_version="1"
+home=$(cd "$(dirname "$target")" && pwd -P)
+scope="${target}_${project_name}"
+
+if coder_marker_should_run "$marker_name" "$marker_version" "$home" "$scope" "$force"; then
+  scaffold_python_project --path "$target" --name "$project_name"
+  coder_marker_write "$marker_name" "$marker_version" "$home" "$scope" >/dev/null
+  log_info "Python scaffold created at $target"
+else
+  marker=$(coder_marker_path "$marker_name" "$marker_version" "$home" "$scope")
+  log_info "Python scaffold already present (marker $marker); skipping"
+fi

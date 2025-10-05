@@ -1,0 +1,62 @@
+#!/bin/bash
+# set_theme - Set the ZSH_THEME in a .zshrc file
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+# shellcheck source=../functions.bash
+source "$SCRIPT_DIR/../functions.bash"
+
+usage() {
+  cat <<EOF
+Usage: $0 [--force] <zshrc_path> <theme>
+
+Set or update the ZSH_THEME variable in a .zshrc file.
+
+Options:
+  --force, -f       Re-run even if a marker is present.
+
+Arguments:
+  zshrc_path        Path to the .zshrc file
+  theme             Theme name (e.g., robbyrussell, agnoster)
+
+Examples:
+  $0 /home/coder/.zshrc robbyrussell
+  $0 --force /root/.zshrc agnoster
+EOF
+  exit 1
+}
+
+main() {
+  local force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force|-f) force=1; shift ;;
+      -h|--help) usage ;;
+      --) shift; break ;;
+      -*) die "Unknown option: $1" ;;
+      *) break ;;
+    esac
+  done
+
+  [[ $# -ne 2 ]] && usage
+
+  local zshrc_path=$1
+  local theme=$2
+
+  local home
+  home=$(cd "$(dirname "$zshrc_path")" && pwd -P)
+  local marker_name="set_theme"
+  local marker_version="1"
+  local scope="${zshrc_path}_${theme}"
+
+  if coder_marker_should_run "$marker_name" "$marker_version" "$home" "$scope" "$force"; then
+    set_zsh_theme "$zshrc_path" "$theme"
+    coder_marker_write "$marker_name" "$marker_version" "$home" "$scope" >/dev/null
+    log_info "Set theme $theme in $zshrc_path"
+  else
+    local marker
+    marker=$(coder_marker_path "$marker_name" "$marker_version" "$home" "$scope")
+    log_info "Zsh theme already set (marker $marker); skipping"
+  fi
+}
+
+main "$@"

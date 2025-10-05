@@ -1,0 +1,68 @@
+#!/bin/bash
+# write_workspace - Create a VS Code workspace file
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+# shellcheck source=../functions.bash
+source "$SCRIPT_DIR/../functions.bash"
+
+usage() {
+  cat <<EOF
+Usage: $0 [--force] <workspace_file> <project_dir> [project_name]
+
+Create a VS Code .code-workspace file.
+
+Options:
+  --force, -f       Re-run even if a marker is present.
+
+Arguments:
+  workspace_file    Path to output .code-workspace file
+  project_dir       Project directory path (absolute)
+  project_name      Optional project name (default: basename of project_dir)
+
+Examples:
+  $0 /home/coder/project.code-workspace /home/coder/my-project
+  $0 --force /workspace/dev.code-workspace /workspace/src CustomName
+EOF
+  exit 1
+}
+
+main() {
+  local force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force|-f) force=1; shift ;;
+      -h|--help) usage ;;
+      --) shift; break ;;
+      -*) die "Unknown option: $1" ;;
+      *) break ;;
+    esac
+  done
+
+  [[ $# -lt 2 ]] && usage
+
+  local workspace_file=$1
+  local project_dir=$2
+  local project_name=${3:-}
+
+  local home
+  home=$(cd "$(dirname "$workspace_file")" && pwd -P)
+  local marker_name="write_workspace"
+  local marker_version="1"
+  local scope="${workspace_file}_${project_dir}_${project_name}"
+
+  if coder_marker_should_run "$marker_name" "$marker_version" "$home" "$scope" "$force"; then
+    if [[ -n "$project_name" ]]; then
+      write_vscode_workspace_file "$workspace_file" "$project_dir" "$project_name"
+    else
+      write_vscode_workspace_file "$workspace_file" "$project_dir"
+    fi
+    coder_marker_write "$marker_name" "$marker_version" "$home" "$scope" >/dev/null
+    log_info "VS Code workspace file ensured at $workspace_file"
+  else
+    local marker
+    marker=$(coder_marker_path "$marker_name" "$marker_version" "$home" "$scope")
+    log_info "Workspace file already ensured (marker $marker); skipping"
+  fi
+}
+
+main "$@"

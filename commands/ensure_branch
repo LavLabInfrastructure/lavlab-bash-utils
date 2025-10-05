@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+# shellcheck source=../functions.bash
+source "${SCRIPT_ROOT}/functions.bash"
+
+usage() {
+  cat <<'EOF'
+Usage: ensure_branch [options]
+
+Ensures that a branch exists on a remote Git repository, creating it if necessary.
+
+Options:
+  --repo-url=URL     Git repository URL (required).
+  --branch=NAME      Branch to ensure (required).
+  --token=TOKEN      Git credential token with push access (optional).
+  --username=NAME    Git username to pair with the token (optional).
+  --base=NAME        Base branch to use when creating the branch.
+  --force            Force re-validation even if a marker exists.
+  --verbose          Enable debug logging.
+  -h, --help         Show this help message.
+EOF
+}
+
+repo_url=""
+branch=""
+token=""
+username=""
+base=""
+force=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repo-url=*) repo_url=${1#*=}; shift ;;
+    --repo-url)
+      shift
+      [[ $# -gt 0 ]] || die "--repo-url requires a value"
+      repo_url=$1
+      shift
+      ;;
+    --branch=*) branch=${1#*=}; shift ;;
+    --branch)
+      shift
+      [[ $# -gt 0 ]] || die "--branch requires a value"
+      branch=$1
+      shift
+      ;;
+    --token=*) token=${1#*=}; shift ;;
+    --token)
+      shift
+      [[ $# -gt 0 ]] || die "--token requires a value"
+      token=$1
+      shift
+      ;;
+    --username=*) username=${1#*=}; shift ;;
+    --username)
+      shift
+      [[ $# -gt 0 ]] || die "--username requires a value"
+      username=$1
+      shift
+      ;;
+    --base=*) base=${1#*=}; shift ;;
+    --base)
+      shift
+      [[ $# -gt 0 ]] || die "--base requires a value"
+      base=$1
+      shift
+      ;;
+    --force|-f) force=1; shift ;;
+    --verbose) BASH_UTILS_VERBOSE=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) die "Unknown option: $1" ;;
+    *) break ;;
+  esac
+done
+
+[[ -n "$repo_url" ]] || { usage >&2; exit 1; }
+[[ -n "$branch" ]] || { usage >&2; exit 1; }
+
+args=(--repo-url "$repo_url" --branch "$branch")
+[[ -n "$token" ]] && args+=(--token "$token")
+[[ -n "$username" ]] && args+=(--username "$username")
+[[ -n "$base" ]] && args+=(--base "$base")
+
+marker_name="ensure_branch"
+marker_version="1"
+scope="${repo_url}_${branch}_${base}_${username}_token_$([[ -n "$token" ]] && echo present || echo none)"
+
+if coder_marker_should_run "$marker_name" "$marker_version" "/root" "$scope" "$force"; then
+  ensure_branch_exists "${args[@]}"
+  coder_marker_write "$marker_name" "$marker_version" "/root" "$scope" >/dev/null
+  log_info "Branch $branch ensured on $repo_url"
+else
+  marker=$(coder_marker_path "$marker_name" "$marker_version" "/root" "$scope")
+  log_info "Branch $branch already validated (marker $marker); skipping"
+fi

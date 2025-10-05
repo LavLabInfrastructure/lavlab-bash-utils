@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
+# shellcheck source=../functions.bash
+source "${SCRIPT_ROOT}/functions.bash"
+
+usage() {
+  cat <<'EOF'
+Usage: setup_root_handoff [--force] [username] [target_dir] [shell]
+
+Configure shell init files so root sessions automatically switch to the
+specified user, ensuring a smooth handoff inside Coder workspaces.
+
+Options:
+  --force, -f       Re-run even if a marker is present.
+
+Arguments:
+  username          Target user (default: coder)
+  target_dir        Working directory (default: /home/<username>)
+  shell             Shell to use (default: /usr/bin/zsh)
+
+Examples:
+  setup_root_handoff
+  setup_root_handoff --force developer
+  setup_root_handoff coder /workspace /bin/bash
+EOF
+  exit 1
+}
+
+main() {
+  require_root
+
+  local force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force|-f) force=1; shift ;;
+      -h|--help) usage ;;
+      --) shift; break ;;
+      -*) die "Unknown option: $1" ;;
+      *) break ;;
+    esac
+  done
+
+  local username=${1:-coder}
+  local target_dir=${2:-/home/$username}
+  local shell=${3:-/usr/bin/zsh}
+
+  local marker_name="setup_root_handoff"
+  local marker_version="1"
+  local scope="${username}_${target_dir}_${shell}"
+  local home=/root
+
+  if coder_marker_should_run "$marker_name" "$marker_version" "$home" "$scope" "$force"; then
+    setup_root_handoff "$username" "$target_dir" "$shell"
+    coder_marker_write "$marker_name" "$marker_version" "$home" "$scope" >/dev/null
+    log_info "Root handoff configured for $username"
+  else
+    local marker
+    marker=$(coder_marker_path "$marker_name" "$marker_version" "$home" "$scope")
+    log_info "Root handoff already configured (marker $marker); skipping"
+  fi
+}
+
+main "$@"
