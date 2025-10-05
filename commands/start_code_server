@@ -88,8 +88,16 @@ marker_version="1"
 scope="port_${port}_auth_${auth}_binary_${binary}"
 
 running=0
-if pgrep -u "$user" -f "code-server.*--port[[:space:]]*$port" >/dev/null 2>&1; then
-  running=1
+if has_cmd pgrep; then
+  if pgrep -u "$user" -f "code-server.*--port[[:space:]]*$port" >/dev/null 2>&1; then
+    running=1
+  fi
+elif has_cmd ps; then
+  if ps -u "$user" -o pid=,args= | grep -E "code-server.*--port[[:space:]]*$port" >/dev/null 2>&1; then
+    running=1
+  fi
+else
+  log_debug "No process-inspection utility available; assuming code-server not running"
 fi
 
 should_run=1
@@ -106,7 +114,17 @@ if [[ $force -eq 0 && $running -eq 1 && $should_run -eq 0 ]]; then
 fi
 
 if [[ $running -eq 1 && $force -eq 1 ]]; then
-  pkill -u "$user" -f "code-server.*--port[[:space:]]*$port" || true
+  if has_cmd pkill; then
+    pkill -u "$user" -f "code-server.*--port[[:space:]]*$port" || true
+  elif has_cmd ps; then
+    log_warn "pkill not available; falling back to ps+kill"
+    while IFS= read -r pid; do
+      [[ -n "$pid" ]] || continue
+      kill "$pid" 2>/dev/null || true
+    done < <(ps -u "$user" -o pid=,args= | awk -v port="$port" '$0 ~ /code-server/ && $0 ~ "--port[[:space:]]*" port {print $1}')
+  else
+    log_warn "No process termination utility available; unable to stop existing code-server process"
+  fi
   sleep 1
 fi
 
