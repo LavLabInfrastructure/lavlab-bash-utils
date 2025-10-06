@@ -840,9 +840,11 @@ TARGET="$target_dir"
 SHELL_BIN="$target_shell"
 
 if [ -d "\$TARGET" ]; then
-  exec su - $target_user -s /bin/sh -c "cd '\$TARGET' && exec \$SHELL_BIN -l"
+  # Launch the user's preferred shell directly and export SHELL so the environment
+  # correctly reflects the login shell (avoids SHELL being /bin/sh when using su -s).
+  exec su - "$target_user" -s "$SHELL_BIN" -c "export SHELL=\"$SHELL_BIN\"; cd '\$TARGET' && exec \"$SHELL_BIN\" -l"
 else
-  exec su - $target_user -s "\$SHELL_BIN"
+  exec su - "$target_user" -s "$SHELL_BIN" -c "export SHELL=\"$SHELL_BIN\"; exec \"$SHELL_BIN\" -l"
 fi
 EOF
   chmod 755 "$handoff_script"
