@@ -111,6 +111,12 @@ if coder_marker_should_run "$marker_name" "$marker_version" "/root" "$scope" "$f
   style=$([[ $use_oh_my -eq 1 ]] && printf 'oh-my' || printf 'minimal')
   install_zsh_for_user "$username" "$theme" "$style"
 
+  # change root default shell to zsh if not already
+  if [[ $(getent passwd root | cut -d: -f7) != /usr/bin/zsh ]]; then
+    log_info "Changing root's default shell to /usr/bin/zsh"
+    chsh -s /usr/bin/zsh root
+  fi
+
   user_home_dir=$(user_home "$username")
   coder_marker_write "$marker_name" "$marker_version" "$user_home_dir" "$scope" "$username" >/dev/null
   log_info "zsh installed for $username"
