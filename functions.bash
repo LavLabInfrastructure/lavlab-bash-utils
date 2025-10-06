@@ -674,10 +674,17 @@ install_vscode_extensions() {
   home=$(getent passwd "$username" | cut -d: -f6)
   [[ -z "$home" ]] && die "Unable to determine home directory for $username"
   
-  local ext_dir="$home/.local/share/code-server/extensions"
-  local vscode_ext_dir="$home/.vscode-server/extensions"
+  # Use the user's ~/.vscode/extensions as the canonical extensions dir for code-server
+  local ext_dir="$home/.vscode/extensions"
   mkdir -p "$ext_dir"
-  
+
+  # Ensure extensions.json exists (code-server may try to read it during install).
+  if [[ ! -f "$ext_dir/extensions.json" ]]; then
+    printf '[]' >"$ext_dir/extensions.json" 2>/dev/null || true
+  fi
+  chown "$username":"$username" "$ext_dir/extensions.json" 2>/dev/null || true
+  chmod 0644 "$ext_dir/extensions.json" 2>/dev/null || true
+
   log_info "Installing VS Code extensions for $username: ${extensions[*]}"
   
   # Try code-server CLI first
@@ -695,17 +702,8 @@ install_vscode_extensions() {
     return 1
   fi
   
-  # Link or sync extension directories
-  if [[ -e "$vscode_ext_dir" ]]; then
-    if [[ -d "$vscode_ext_dir" && -z "$(ls -A "$vscode_ext_dir" 2>/dev/null)" ]]; then
-      rm -rf "$vscode_ext_dir"
-      ln -s "$ext_dir" "$vscode_ext_dir" || mkdir -p "$vscode_ext_dir"
-    fi
-  else
-    ln -s "$ext_dir" "$vscode_ext_dir" || mkdir -p "$vscode_ext_dir"
-  fi
-  
-  chown -R "$username":"$username" "$ext_dir" "$vscode_ext_dir" 2>/dev/null || true
+  # No symlinks or syncs; code-server will write directly into ~/.vscode/extensions
+  chown -R "$username":"$username" "$ext_dir" 2>/dev/null || true
 }
 
 write_vscode_workspace_file() {
