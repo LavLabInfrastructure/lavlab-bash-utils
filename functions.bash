@@ -676,7 +676,19 @@ install_vscode_extensions() {
   
   # Use the user's ~/.vscode/extensions as the canonical extensions dir for code-server
   local ext_dir="$home/.vscode/extensions"
-  mkdir -p "$ext_dir"
+  local base_vscode_dir="$home/.vscode"
+
+  # If ~/.vscode is a symlink, remove it and create a real directory to avoid mismatched ownership.
+  if [[ -L "$base_vscode_dir" ]]; then
+    log_warn "$base_vscode_dir is a symlink; replacing with a real directory to ensure writable extensions dir"
+    unlink "$base_vscode_dir" 2>/dev/null || true
+  fi
+
+  mkdir -p "$ext_dir" "$base_vscode_dir" 2>/dev/null || true
+
+  # Ensure ownership and permissions so the workspace user can create extension subdirs.
+  chown -R "$username":"$username" "$base_vscode_dir" 2>/dev/null || true
+  chmod 0755 "$base_vscode_dir" "$ext_dir" 2>/dev/null || true
 
   # Ensure extensions.json exists (code-server may try to read it during install).
   if [[ ! -f "$ext_dir/extensions.json" ]]; then
@@ -686,21 +698,44 @@ install_vscode_extensions() {
   chmod 0644 "$ext_dir/extensions.json" 2>/dev/null || true
 
   log_info "Installing VS Code extensions for $username: ${extensions[*]}"
+
+  # Quick write test as the target user to ensure we won't hit EACCES during installs.
+  if ! run_as_user "$username" sh -c "touch '$ext_dir/.coder_ext_test' >/dev/null 2>&1 && rm -f '$ext_dir/.coder_ext_test' >/dev/null 2>&1"; then
+    log_warn "Extensions directory $ext_dir is not writable by $username; skipping extension installation"
+    return 1
+  fi
   
-  # Try code-server CLI first
-  if [[ -f /tmp/code-server/bin/code-server ]]; then
-    log_debug "Using /tmp/code-server/bin/code-server to install extensions"
-    for ext in "${extensions[@]}"; do
-      run_as_user "$username" /tmp/code-server/bin/code-server --install-extension "$ext" --extensions-dir "$ext_dir" || true
-    done
+  # Locate a code-server / code CLI to use for installs
+  local cs_bin=""
+  if [[ -x /tmp/code-server/bin/code-server ]]; then
+    cs_bin="/tmp/code-server/bin/code-server"
+  elif [[ -x /code-server/bin/code-server ]]; then
+    cs_bin="/code-server/bin/code-server"
   elif has_cmd code; then
-    for ext in "${extensions[@]}"; do
-      run_as_user "$username" code --install-extension "$ext" --extensions-dir "$ext_dir" || true
-    done
-  else
+    cs_bin="$(command -v code)"
+  fi
+
+  if [[ -z "$cs_bin" ]]; then
     log_warn "No VS Code CLI found; skipping extension installation"
     return 1
   fi
+
+  # Install each extension with a few retries to handle transient EACCES or network issues.
+  for ext in "${extensions[@]}"; do
+    retries=3
+    count=0
+    while :; do
+      if run_as_user "$username" "$cs_bin" --install-extension "$ext" --extensions-dir "$ext_dir"; then
+        break
+      fi
+      count=$((count+1))
+      if [[ $count -ge $retries ]]; then
+        log_warn "Failed to install extension $ext after $retries attempts"
+        break
+      fi
+      sleep $((count*2))
+    done
+  done
   
   # No symlinks or syncs; code-server will write directly into ~/.vscode/extensions
   chown -R "$username":"$username" "$ext_dir" 2>/dev/null || true
