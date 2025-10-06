@@ -681,9 +681,9 @@ install_vscode_extensions() {
   log_info "Installing VS Code extensions for $username: ${extensions[*]}"
   
   # Try code-server CLI first
-  if [[ -x /code-server/bin/code-server ]]; then
+  if [[ -x /tmp/code-server/bin/code-server ]]; then
     for ext in "${extensions[@]}"; do
-      run_as_user "$username" /code-server/bin/code-server --install-extension "$ext" --extensions-dir "$ext_dir" || true
+      run_as_user "$username" /tmp/code-server/bin/code-server --install-extension "$ext" --extensions-dir "$ext_dir" || true
     done
   elif has_cmd code; then
     for ext in "${extensions[@]}"; do
