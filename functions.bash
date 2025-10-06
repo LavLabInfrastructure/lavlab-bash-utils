@@ -839,12 +839,12 @@ export CODER_ROOT_HANDOFF=1
 TARGET="$target_dir"
 SHELL_BIN="$target_shell"
 
-if [ -d "\$TARGET" ]; then
+if [ -d "$target_dir" ]; then
   # Launch the user's preferred shell directly and export SHELL so the environment
   # correctly reflects the login shell (avoids SHELL being /bin/sh when using su -s).
-  exec su - "$target_user" -s "$SHELL_BIN" -c "export SHELL=\"$SHELL_BIN\"; cd '\$TARGET' && exec \"$SHELL_BIN\" -l"
+  exec su - "$target_user" -s "$target_shell" -c "export SHELL=\"$target_shell\"; cd \"$target_dir\" && exec \"$target_shell\" -l"
 else
-  exec su - "$target_user" -s "$SHELL_BIN" -c "export SHELL=\"$SHELL_BIN\"; exec \"$SHELL_BIN\" -l"
+  exec su - "$target_user" -s "$target_shell" -c "export SHELL=\"$target_shell\"; exec \"$target_shell\" -l"
 fi
 EOF
   chmod 755 "$handoff_script"
