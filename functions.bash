@@ -568,12 +568,12 @@ scaffold_python_project() {
 ipykernel
 # Add your runtime dependencies here, one per line.
 REQ
-  if [[ command -v python3 >/dev/null 2>&1 ]]; then
+  if command -v python3 >/dev/null 2>&1; then
     python3 -m venv "$target_dir/.venv"
-    $target_dir/.venv/bin/pip install --upgrade pip
-    $target_dir/.venv/bin/pip install -r "$target_dir/requirements.txt"
+    "$target_dir/.venv/bin/pip" install --upgrade pip
+    "$target_dir/.venv/bin/pip" install -r "$target_dir/requirements.txt"
   fi
-  if [[ command -v git >/dev/null 2>&1 ]]; then
+  if command -v git >/dev/null 2>&1; then
     git -C "$target_dir" init -q
     git -C "$target_dir" add .
     git -C "$target_dir" commit -m "Scaffolded directory." -q
