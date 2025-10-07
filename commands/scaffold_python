@@ -15,6 +15,7 @@ Options:
   --path=DIR         Target directory for the scaffold (required).
   --name=NAME        Project display name (default: Workspace Project).
   --force            Re-run even if a marker is present.
+    --owner=OWNER      Which owner/org to set as remote origin (lavlabinfrastructure | laviolette-lab | user). Defaults to laviolette-lab.
   --verbose          Enable debug logging.
   -h, --help         Show this help message.
 EOF
@@ -23,6 +24,7 @@ EOF
 target=""
 project_name="Workspace Project"
 force=0
+owner="laviolette-lab"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -41,6 +43,13 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --force|-f) force=1; shift ;;
+    --owner=*) owner=${1#*=}; shift ;;
+    --owner)
+      shift
+      [[ $# -gt 0 ]] || die "--owner requires a value"
+      owner=$1
+      shift
+      ;;
     --verbose) BASH_UTILS_VERBOSE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
@@ -57,7 +66,7 @@ home=$(cd "$(dirname "$target")" && pwd -P)
 scope="${target}_${project_name}"
 
 if coder_marker_should_run "$marker_name" "$marker_version" "$home" "$scope" "$force"; then
-  scaffold_python_project --path "$target" --name "$project_name"
+  scaffold_python_project --path "$target" --name "$project_name" --owner "$owner"
   coder_marker_write "$marker_name" "$marker_version" "$home" "$scope" >/dev/null
   log_info "Python scaffold created at $target"
 else

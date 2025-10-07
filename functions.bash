@@ -591,10 +591,13 @@ ensure_branch_exists() {
 scaffold_python_project() {
   local target_dir=""
   local project_name="Sample Project"
+  local owner="laviolette-lab"
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --path) target_dir=$2; shift 2 ;;
       --name) project_name=$2; shift 2 ;;
+      --owner) owner=$2; shift 2 ;;
+      --owner=*) owner=${1#*=}; shift ;;
       *) die "Unknown option for scaffold_python_project: $1" ;;
     esac
   done
@@ -614,6 +617,19 @@ REQ
     git -C "$target_dir" init -q
     git -C "$target_dir" add .
     git -C "$target_dir" commit -m "Scaffolded directory." -q
+    # Configure remote origin based on requested owner. If owner is 'user', we leave origin unset
+    # and let the user configure their own remote. Otherwise set origin to https://github.com/<owner>/<repo>.git
+    if [[ "$owner" != "user" && -n "$owner" ]]; then
+      # Derive repo name from target_dir (basename) and sanitize
+      repo_name=$(basename "$target_dir")
+      repo_name=${repo_name//:/-}
+      repo_name=${repo_name//./-}
+      remote_url="https://github.com/${owner}/${repo_name}.git"
+      git -C "$target_dir" remote add origin "$remote_url" || git -C "$target_dir" remote set-url origin "$remote_url"
+      log_info "Set git remote origin to $remote_url"
+    else
+      log_info "Owner set to 'user' or empty; not configuring remote origin"
+    fi
   fi
   cat >"$target_dir/README.md" <<EOF
 # $project_name
