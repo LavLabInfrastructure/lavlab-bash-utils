@@ -408,11 +408,48 @@ set_login_shell() {
   if ! id "$username" >/dev/null 2>&1; then
     die "Cannot set shell; user $username does not exist"
   fi
+
+  if [[ -z "$shell_path" ]]; then
+    die "set_login_shell requires a non-empty shell path"
+  fi
+
+  # Register shell in /etc/shells if missing
   if ! grep -Fx "$shell_path" /etc/shells >/dev/null 2>&1; then
     log_info "Registering $shell_path in /etc/shells"
+    # Ensure /etc/shells exists
+    touch /etc/shells 2>/dev/null || true
     printf '%s\n' "$shell_path" >> /etc/shells
   fi
-  chsh -s "$shell_path" "$username"
+
+  # Prefer chsh, fall back to usermod, then a safe /etc/passwd edit as last resort.
+  if has_cmd chsh; then
+    if chsh -s "$shell_path" "$username"; then
+      return 0
+    else
+      log_warn "chsh failed to set shell for $username; trying fallback methods"
+    fi
+  fi
+
+  if has_cmd usermod; then
+    if usermod -s "$shell_path" "$username"; then
+      return 0
+    else
+      log_warn "usermod failed to set shell for $username; trying passwd file edit"
+    fi
+  fi
+
+  # Final fallback: edit /etc/passwd atomically. This is a last-resort measure.
+  if [[ -w /etc/passwd ]]; then
+    awk -F: -v user="$username" -v shell="$shell_path" 'BEGIN{OFS=FS} { if ($1==user) $7=shell; print }' /etc/passwd > /etc/passwd.tmp && mv /etc/passwd.tmp /etc/passwd && chmod 644 /etc/passwd
+    if grep -q "^${username}:" /etc/passwd && awk -F: -v user="$username" '($1==user){print $7}' /etc/passwd | grep -Fq "$shell_path"; then
+      log_info "Set login shell for $username to $shell_path via /etc/passwd edit"
+      return 0
+    else
+      die "Failed to set login shell for $username"
+    fi
+  else
+    die "Unable to modify /etc/passwd to set shell for $username"
+  fi
 }
 
 ensure_home_skeleton() {
@@ -599,10 +636,28 @@ install_zsh_for_user() {
   local theme=${2:-eastwood}
   local style=${3:-minimal}
 
-  ensure_packages zsh
+  log_info "Installing zsh for user $username"
+  # Install zsh (best-effort) and report failures with context
+  if ! ensure_packages zsh; then
+    log_warn "Package install for zsh reported problems. Continuing to attempt configuration but zsh may be missing."
+  fi
+
   ensure_user --name "$username" --shell /bin/bash
   ensure_home_skeleton "$username"
-  set_login_shell "$username" "$(command -v zsh)"
+
+  # Verify zsh is present before changing the login shell
+  local zsh_path
+  zsh_path=$(command -v zsh 2>/dev/null || true)
+  if [[ -z "$zsh_path" ]]; then
+    log_error "zsh binary not found after ensure_packages. Detected package manager: $__BASH_UTILS_PKG_MANAGER."
+    log_error "Check the container's package manager or install zsh manually (e.g., apt-get install -y zsh)."
+    return 1
+  fi
+
+  if ! set_login_shell "$username" "$zsh_path"; then
+    log_error "Failed to set login shell for $username to $zsh_path"
+    return 1
+  fi
 
   local home
   home=$(getent passwd "$username" | cut -d: -f6)
@@ -649,7 +704,10 @@ ensure_oh_my_zsh() {
     return 0
   fi
   log_info "Installing oh-my-zsh for $username"
-  run_as_user "$username" git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh "$omz_dir"
+  if ! run_as_user "$username" git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh "$omz_dir"; then
+    log_warn "Failed to clone oh-my-zsh into $omz_dir as $username. Check network access and git credentials (if any)."
+    return 1
+  fi
 }
 
 # VS Code / code-server helpers -----------------------------------------------
