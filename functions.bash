@@ -547,7 +547,7 @@ ensure_branch_exists() {
   tmpdir=$(mktemp -d)
   trap 'rm -rf "$tmpdir"' EXIT
   log_info "Ensuring branch $branch exists in $repo_url"
-  git -C "$tmpdir" init -q
+  git -C "$tmpdir" init -q --initial-branch main
   git -C "$tmpdir" remote add origin "$repo_url"
   if [[ -n "$token" ]]; then
     git -C "$tmpdir" config credential.helper "!f(){ printf 'username=%s\n' '${git_user:-oauth2}'; printf 'password=%s\n' '$token'; }; f"
@@ -614,7 +614,7 @@ REQ
     "$target_dir/.venv/bin/pip" install -r "$target_dir/requirements.txt"
   fi
   if command -v git >/dev/null 2>&1; then
-    git -C "$target_dir" init -q
+    git -C "$target_dir" init -q --initial-branch main
     git -C "$target_dir" add .
     git -C "$target_dir" commit -m "Scaffolded directory." -q
     # Configure remote origin based on requested owner. If owner is 'user', we leave origin unset
