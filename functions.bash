@@ -674,9 +674,9 @@ install_vscode_extensions() {
   home=$(getent passwd "$username" | cut -d: -f6)
   [[ -z "$home" ]] && die "Unable to determine home directory for $username"
   
-  # Use the user's ~/.vscode/extensions as the canonical extensions dir for code-server
-  local ext_dir="$home/.vscode/extensions"
-  local base_vscode_dir="$home/.vscode"
+  # Use the user's ~/.vscode-server/extensions as the canonical extensions dir for code-server
+  local ext_dir="$home/.vscode-server/extensions"
+  local base_vscode_dir="$home/.vscode-server"
 
   # If ~/.vscode is a symlink, remove it and create a real directory to avoid mismatched ownership.
   if [[ -L "$base_vscode_dir" ]]; then
