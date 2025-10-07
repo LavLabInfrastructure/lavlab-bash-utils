@@ -563,17 +563,21 @@ scaffold_python_project() {
   done
   [[ -z "$target_dir" ]] && die "scaffold_python_project requires --path"
   mkdir -p "$target_dir/src"
-  cat >"$target_dir/src/main.py" <<'PY'
-def main():
-    print("Hello from your scaffolded workspace!")
-
-
-if __name__ == "__main__":
-    main()
-PY
+  touch "$target_dir/src/main.ipynb"
   cat >"$target_dir/requirements.txt" <<'REQ'
-# Add runtime dependencies here
+ipykernel
+# Add your runtime dependencies here, one per line.
 REQ
+  if [[ command -v python3 >/dev/null 2>&1 ]]; then
+    python3 -m venv "$target_dir/.venv"
+    $target_dir/.venv/bin/pip install --upgrade pip
+    $target_dir/.venv/bin/pip install -r "$target_dir/requirements.txt"
+  fi
+  if [[ command -v git >/dev/null 2>&1 ]]; then
+    git -C "$target_dir" init -q
+    git -C "$target_dir" add .
+    git -C "$target_dir" commit -m "Scaffolded directory." -q
+  fi
   cat >"$target_dir/README.md" <<EOF
 # $project_name
 
