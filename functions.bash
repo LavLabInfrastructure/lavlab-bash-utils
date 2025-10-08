@@ -806,10 +806,55 @@ install_vscode_extensions() {
 
   # Install each extension with a few retries to handle transient EACCES or network issues.
   for ext in "${extensions[@]}"; do
+    # Support remote URLs (http/https) by downloading to a temporary file first.
+    local install_target="$ext"
+    local _tmp_ext_dir=""
+    if printf '%s' "$ext" | grep -Eq '^https?://'; then
+      if ! has_cmd curl && ! has_cmd wget; then
+        log_warn "No downloader (curl or wget) available to fetch $ext; skipping"
+        continue
+      fi
+      _tmp_ext_dir=$(mktemp -d 2>/dev/null || mktemp -d -t vscode_ext)
+      install_target="$_tmp_ext_dir/$(basename "${ext%%[\?\#]*}")"
+
+      # Download with simple retries
+      dl_retries=3
+      dl_count=0
+      dl_ok=0
+      while :; do
+        if has_cmd curl; then
+          if curl -fsSL -o "$install_target" "$ext"; then
+            dl_ok=1
+            break
+          fi
+        elif has_cmd wget; then
+          if wget -q -O "$install_target" "$ext"; then
+            dl_ok=1
+            break
+          fi
+        fi
+        dl_count=$((dl_count+1))
+        if [[ $dl_count -ge $dl_retries ]]; then
+          break
+        fi
+        sleep $((dl_count*2))
+      done
+
+      if [[ $dl_ok -ne 1 || ! -f "$install_target" ]]; then
+        log_warn "Failed to download extension from $ext; skipping"
+        rm -rf "$_tmp_ext_dir" 2>/dev/null || true
+        continue
+      fi
+
+      # Make the downloaded file readable by the target user
+      chown "$username":"$username" "$install_target" 2>/dev/null || true
+      chmod 0644 "$install_target" 2>/dev/null || true
+    fi
+
     retries=3
     count=0
     while :; do
-      if run_as_user "$username" "$cs_bin" --install-extension "$ext" --extensions-dir "$ext_dir"; then
+      if run_as_user "$username" "$cs_bin" --install-extension "$install_target" --extensions-dir "$ext_dir"; then
         break
       fi
       count=$((count+1))
@@ -819,6 +864,11 @@ install_vscode_extensions() {
       fi
       sleep $((count*2))
     done
+
+    # Clean up any temporary download directory
+    if [[ -n "$_tmp_ext_dir" ]]; then
+      rm -rf "$_tmp_ext_dir" 2>/dev/null || true
+    fi
   done
   
   # No symlinks or syncs; code-server will write directly into ~/.vscode/extensions
