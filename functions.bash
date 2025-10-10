@@ -742,7 +742,8 @@ write_vscode_settings() {
   "github.gitAuthentication": true,
   "git.enabled": true,
   "files.autoSave": "afterDelay",
-  "editor.formatOnSave": true
+  "editor.formatOnSave": true,
+  "remote.autoForwardPortsSource": "process"
 }
 EOF
   chown -R "$username":"$username" "$home/.vscode-server"
