@@ -986,7 +986,7 @@ interactive=0
 case "\$-" in
   *i*) interactive=1 ;;
 esac
-if [ "$interactive" -ne 1 ]; then
+if [ "\$interactive" -ne 1 ]; then
   # If this non-interactive invocation is explicitly running 'coder' via
   # SSH_ORIGINAL_COMMAND, allow it; otherwise skip handoff for non-interactive.
   if [ -n "\${SSH_ORIGINAL_COMMAND:-}" ] && printf '%s' "\${SSH_ORIGINAL_COMMAND}" | grep -q 'coder'; then
@@ -996,9 +996,9 @@ if [ "$interactive" -ne 1 ]; then
 fi
 
 # Additionally, if the invoking/parent process is a coder binary, skip the handoff.
-if command -v ps >/dev/null 2>&1; then
-  parent_comm=$(ps -o comm= -p "${PPID}" 2>/dev/null || true)
-  case "${parent_comm:-}" in
+  if command -v ps >/dev/null 2>&1; then
+  parent_comm=$(ps -o comm= -p "\${PPID}" 2>/dev/null || true)
+  case "\${parent_comm:-}" in
     *coder*) exit 0 ;;
   esac
 fi
