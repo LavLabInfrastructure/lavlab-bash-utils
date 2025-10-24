@@ -970,13 +970,36 @@ setup_root_handoff() {
   cat >"$handoff_script" <<EOF
 #!/bin/sh
 # root→$target_user handoff installed by lavlab-bash-utils
+# The handoff should not occur when root is running a specific command such as
+# the 'coder' CLI. We use several heuristics (SUDO_COMMAND, SSH_ORIGINAL_COMMAND,
+# and the parent process name) to detect these cases and exit early.
 if [ "\$(id -u)" -ne 0 ]; then
   exit 0
 fi
+
+# Prevent recursive handoff
 if [ "\${CODER_ROOT_HANDOFF:-0}" = "1" ]; then
   exit 0
 fi
 export CODER_ROOT_HANDOFF=1
+
+# Heuristic: if sudo invoked a command that includes 'coder', skip handoff
+if [ -n "\${SUDO_COMMAND:-}" ] && printf '%s\n' "\${SUDO_COMMAND:-}" | grep -Eq '(^|[[:space:]])coder($|[[:space:]])'; then
+  exit 0
+fi
+
+# Heuristic: if SSH_ORIGINAL_COMMAND (used by some SSH/SFTP setups) requests coder
+if [ -n "\${SSH_ORIGINAL_COMMAND:-}" ] && printf '%s\n' "\${SSH_ORIGINAL_COMMAND:-}" | grep -Eq '(^|[[:space:]])coder($|[[:space:]])'; then
+  exit 0
+fi
+
+# Heuristic: if the parent process is 'coder' (or similar), avoid handoff
+_pp="\$(ps -o comm= -p \"\$PPID\" 2>/dev/null || true)"
+case "$_pp" in
+  coder|code-server|code)
+    exit 0
+    ;;
+esac
 
 TARGET="$target_dir"
 SHELL_BIN="$target_shell"
