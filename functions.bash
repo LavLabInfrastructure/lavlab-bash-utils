@@ -851,6 +851,10 @@ install_vscode_extensions() {
       fi
 
       # Make the downloaded file readable by the target user
+      # Ensure the temp directory and file are accessible by the target user. mktemp -d creates
+      # directories with mode 0700 which can block another user from reading files inside.
+      chown -R "$username":"$username" "$_tmp_ext_dir" 2>/dev/null || true
+      chmod 0755 "$_tmp_ext_dir" 2>/dev/null || true
       chown "$username":"$username" "$install_target" 2>/dev/null || true
       chmod 0644 "$install_target" 2>/dev/null || true
     fi
