@@ -620,15 +620,15 @@ REQ
     git -C "$target_dir" init -q --initial-branch main
     git -C "$target_dir" add .
     git -C "$target_dir" commit -m "Scaffolded directory." -q
-    # Configure remote origin based on requested owner. If owner is 'user', we leave origin unset
-    # and let the user configure their own remote. Otherwise set origin to https://github.com/<owner>/<repo>.git
+    # Configure remote origin unless --no-remote was provided.
     if [[ $configure_remote -eq 1 && -n "$owner" ]]; then
       # Derive repo name from target_dir (basename) and sanitize
       repo_name=$(basename "$target_dir")
-    repo_name=${repo_name//:/-}
+      repo_name=${repo_name//:/-}
       repo_name=${repo_name//./-}
       remote_url="https://github.com/${owner}/${repo_name}.git"
       git -C "$target_dir" remote add origin "$remote_url" || git -C "$target_dir" remote set-url origin "$remote_url"
+      git -C "$target_dir" branch --set-upstream-to="origin/main" main 2>/dev/null || true
       log_info "Set git remote origin to $remote_url"
     else
       log_info "Skipping remote origin configuration"
