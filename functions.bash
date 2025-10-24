@@ -970,36 +970,38 @@ setup_root_handoff() {
   cat >"$handoff_script" <<EOF
 #!/bin/sh
 # root→$target_user handoff installed by lavlab-bash-utils
-# The handoff should not occur when root is running a specific command such as
-# the 'coder' CLI. We use several heuristics (SUDO_COMMAND, SSH_ORIGINAL_COMMAND,
-# and the parent process name) to detect these cases and exit early.
+# Behavior change: only auto-handoff for interactive root shells. If the
+# session is non-interactive (scripts, daemon invocations, or explicit
+# commands like "coder"), we skip the handoff so root can run those commands.
 if [ "\$(id -u)" -ne 0 ]; then
   exit 0
 fi
-
-# Prevent recursive handoff
 if [ "\${CODER_ROOT_HANDOFF:-0}" = "1" ]; then
   exit 0
 fi
 export CODER_ROOT_HANDOFF=1
 
-# Heuristic: if sudo invoked a command that includes 'coder', skip handoff
-if [ -n "\${SUDO_COMMAND:-}" ] && printf '%s\n' "\${SUDO_COMMAND:-}" | grep -Eq '(^|[[:space:]])coder($|[[:space:]])'; then
-  exit 0
-fi
-
-# Heuristic: if SSH_ORIGINAL_COMMAND (used by some SSH/SFTP setups) requests coder
-if [ -n "\${SSH_ORIGINAL_COMMAND:-}" ] && printf '%s\n' "\${SSH_ORIGINAL_COMMAND:-}" | grep -Eq '(^|[[:space:]])coder($|[[:space:]])'; then
-  exit 0
-fi
-
-# Heuristic: if the parent process is 'coder' (or similar), avoid handoff
-_pp="\$(ps -o comm= -p \"\$PPID\" 2>/dev/null || true)"
-case "$_pp" in
-  coder|code-server|code)
-    exit 0
-    ;;
+# Detect interactivity: if the shell is not interactive, do not handoff.
+interactive=0
+case "\$-" in
+  *i*) interactive=1 ;;
 esac
+if [ "$interactive" -ne 1 ]; then
+  # If this non-interactive invocation is explicitly running 'coder' via
+  # SSH_ORIGINAL_COMMAND, allow it; otherwise skip handoff for non-interactive.
+  if [ -n "\${SSH_ORIGINAL_COMMAND:-}" ] && printf '%s' "\${SSH_ORIGINAL_COMMAND}" | grep -q 'coder'; then
+    exit 0
+  fi
+  exit 0
+fi
+
+# Additionally, if the invoking/parent process is a coder binary, skip the handoff.
+if command -v ps >/dev/null 2>&1; then
+  parent_comm=$(ps -o comm= -p "${PPID}" 2>/dev/null || true)
+  case "${parent_comm:-}" in
+    *coder*) exit 0 ;;
+  esac
+fi
 
 TARGET="$target_dir"
 SHELL_BIN="$target_shell"
