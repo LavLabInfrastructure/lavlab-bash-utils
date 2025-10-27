@@ -958,7 +958,9 @@ clone_or_update_repo() {
 setup_root_handoff() {
   require_root
   local target_user=${1:-coder}
+  log_info "Configuring root handoff to $2"
   local target_home=${2:-/home/$target_user}
+  log_info "Target home directory: $target_home"
   local target_shell=${3:-/usr/bin/zsh}
   local handoff_dir="/usr/local/lib/coder"
   local handoff_script="${handoff_dir}/root-handoff.sh"
