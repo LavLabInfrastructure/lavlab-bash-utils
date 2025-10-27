@@ -970,28 +970,25 @@ setup_root_handoff() {
   cat >"$handoff_script" <<'HANDOFF_SCRIPT'
 #!/bin/sh
 # root→coder handoff installed by lavlab-bash-utils
-# Only auto-handoff for interactive root shells. Skip for non-interactive 
-# sessions (scripts, commands like "coder", SSH_ORIGINAL_COMMAND invocations).
 
+# Skip if already handed off
+if [ "${CODER_ROOT_HANDOFF:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+
+# Skip if not root
 if [ "$(id -u)" -ne 0 ]; then
   exit 0
 fi
 
-if [ "${CODER_ROOT_HANDOFF:-0}" = "1" ]; then
-  exit 0
-fi
-
+# Mark that we're handing off to avoid infinite loops
 export CODER_ROOT_HANDOFF=1
 
-# Detect interactivity
-interactive=0
+# Detect interactivity - if not interactive, don't handoff
 case "$-" in
-  *i*) interactive=1 ;;
+  *i*) ;;
+  *) exit 0 ;;
 esac
-
-if [ "$interactive" -ne 1 ]; then
-  exit 0
-fi
 
 # Skip if parent process is coder binary
 if command -v ps >/dev/null 2>&1; then
@@ -1010,10 +1007,12 @@ TARGET_USER="TARGET_USER_PLACEHOLDER"
 TARGET_DIR="TARGET_DIR_PLACEHOLDER"
 TARGET_SHELL="TARGET_SHELL_PLACEHOLDER"
 
+# Change to target directory if it exists
 if [ -d "$TARGET_DIR" ]; then
   cd "$TARGET_DIR" || true
 fi
 
+# Hand off to the target user with their shell
 exec su - "$TARGET_USER" -s "$TARGET_SHELL"
 HANDOFF_SCRIPT
 
@@ -1024,6 +1023,7 @@ HANDOFF_SCRIPT
   chmod 755 "$handoff_script"
   
   # Install profile hook for all shells (sh/bash/zsh/ksh)
+  mkdir -p /etc/profile.d
   cat >/etc/profile.d/99-coder-handoff.sh <<'PROFILE_HOOK'
 # Coder root handoff hook
 if [ "$(id -u)" -eq 0 ] && [ -x /usr/local/lib/coder/drop_root_to_coder.sh ]; then
@@ -1031,6 +1031,22 @@ if [ "$(id -u)" -eq 0 ] && [ -x /usr/local/lib/coder/drop_root_to_coder.sh ]; th
 fi
 PROFILE_HOOK
   chmod 755 /etc/profile.d/99-coder-handoff.sh
+  
+  # Also add to root's own profile files to catch all shell types
+  for rc_file in /root/.profile /root/.bash_profile /root/.bashrc /root/.zprofile /root/.zshrc; do
+    if [[ ! -f "$rc_file" ]]; then
+      touch "$rc_file"
+    fi
+    if ! grep -q 'coder-handoff' "$rc_file" 2>/dev/null; then
+      cat >>"$rc_file" <<'ROOT_RC'
+
+# Coder root handoff
+if [ "$(id -u)" -eq 0 ] && [ -x /usr/local/lib/coder/drop_root_to_coder.sh ]; then
+  exec /usr/local/lib/coder/drop_root_to_coder.sh
+fi
+ROOT_RC
+    fi
+  done
   
   log_info "Root handoff configured; root shells will auto-switch to $target_user"
 }
