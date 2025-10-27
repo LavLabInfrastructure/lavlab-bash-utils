@@ -12,74 +12,89 @@ __BASH_UTILS_LOADED=1
 
 if [[ "${BASH_SOURCE[0]:-}" == "${0}" ]]; then
   echo "functions.bash is a library and must be sourced (not executed)." >&2
-  exit 1
-fi
+    log_info "Setting up root-to-$target_user shell handoff"
 
-BASH_UTILS_VERBOSE=${BASH_UTILS_VERBOSE:-0}
-BASH_UTILS_COLOR=${BASH_UTILS_COLOR:-1}
+    local handoff_root=/usr/local/lib/coder
+    local handoff_script="$handoff_root/root-handoff.sh"
 
-__bash_utils_color_enabled() {
-  [[ ${BASH_UTILS_COLOR} -eq 1 && -t 2 ]]
-}
+    mkdir -p "$handoff_root"
 
-__bash_utils_color() {
-  local color=$1
-  local text=$2
-  if __bash_utils_color_enabled; then
-    printf '\033[%sm%s\033[0m' "$color" "$text"
-  else
-    printf '%s' "$text"
+    cat >"$handoff_script" <<'HANDOFF'
+  #!/bin/sh
+  # Coder workspace root handoff helper
+
+  TARGET_USER="TARGET_USER_PLACEHOLDER"
+  TARGET_DIR="TARGET_DIR_PLACEHOLDER"
+  TARGET_SHELL="TARGET_SHELL_PLACEHOLDER"
+
+  # If already running as non-root, just exec the requested shell
+  if [ "$(id -u)" -ne 0 ]; then
+    exec "$TARGET_SHELL" "$@"
   fi
-}
 
-_log() {
-  local level=$1
-  shift
-  local message="$*"
-  local prefix
-  case "$level" in
-    INFO) prefix="\033[32m[INFO]\033[0m" ;;
-    WARN) prefix="\033[33m[WARN]\033[0m" ;;
-    ERROR) prefix="\033[31m[ERR]\033[0m" ;;
-    DEBUG) prefix="\033[36m[DBG]\033[0m" ;;
-    *) prefix="[${level}]" ;;
-  esac
-  if __bash_utils_color_enabled; then
-    printf '%b %s\n' "$prefix" "$message" >&2
-  else
-    printf '[%s] %s\n' "$level" "$message" >&2
+  # Allow callers to opt-out when root is required (e.g. metrics collectors)
+  if [ "${CODER_ALLOW_ROOT:-0}" = "1" ]; then
+    exec "$TARGET_SHELL" "$@"
   fi
-}
 
-log_info() { _log INFO "$*"; }
-log_warn() { _log WARN "$*"; }
-log_error() { _log ERROR "$*"; }
-log_debug() {
-  [[ ${BASH_UTILS_VERBOSE} -ge 1 ]] && _log DEBUG "$*"
-}
-
-die() {
-  local status=${2:-1}
-  log_error "$1"
-  exit "$status"
-}
-
-has_cmd() {
-  command -v "$1" >/dev/null 2>&1
-}
-
-require_root() {
-  if [[ $(id -u) -ne 0 ]]; then
-    die "This action must be run with root privileges."
+  # Skip handoff when there is no interactive TTY attached
+  if ! [ -t 0 ] || ! [ -t 1 ]; then
+    exec "$TARGET_SHELL" "$@"
   fi
-}
 
-run_as_user() {
-  local username=$1
-  shift
-  if [[ $(id -un) == "$username" ]]; then
-    "$@"
-  else
+  # Skip when invoked by known system daemons
+  if command -v ps >/dev/null 2>&1; then
+    parent_comm=$(ps -o comm= -p "$PPID" 2>/dev/null || true)
+    case "$parent_comm" in
+      coder*|ssh*|systemd*|containerd*|dockerd*)
+        exec "$TARGET_SHELL" "$@"
+        ;;
+    esac
+  fi
+
+  # Skip when an explicit SSH command is being executed
+  if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
+    exec "$TARGET_SHELL" "$@"
+  fi
+
+  # Change into the target user's home if it exists for a smoother handoff
+  if [ -d "$TARGET_DIR" ]; then
+    cd "$TARGET_DIR" 2>/dev/null || true
+  fi
+
+  export CODER_ALLOW_ROOT=1
+  exec su - "$TARGET_USER" -s "$TARGET_SHELL"
+  HANDOFF
+
+    sed -i "s|TARGET_USER_PLACEHOLDER|$target_user|g" "$handoff_script"
+    sed -i "s|TARGET_DIR_PLACEHOLDER|$target_dir|g" "$handoff_script"
+    sed -i "s|TARGET_SHELL_PLACEHOLDER|$target_shell|g" "$handoff_script"
+    chmod 0755 "$handoff_script"
+
+    # Ensure the script is an allowed login shell so chsh/usermod can reference it if needed
+    if ! grep -Fx "$handoff_script" /etc/shells >/dev/null 2>&1; then
+      printf '%s\n' "$handoff_script" >> /etc/shells
+    fi
+
+    local hook="\n# coder root handoff\nif [ -x $handoff_script ]; then\n  exec $handoff_script \"\$@\"\nfi\n"
+    local rc_files=(
+      /root/.profile
+      /root/.bash_profile
+      /root/.bash_login
+      /root/.bashrc
+      /root/.zprofile
+      /root/.zlogin
+      /root/.zshrc
+    )
+
+    for rc in "${rc_files[@]}"; do
+      touch "$rc"
+      if ! grep -q 'coder root handoff' "$rc" 2>/dev/null; then
+        printf '%b' "$hook" >>"$rc"
+      fi
+    done
+
+    log_info "Root handoff configured; interactive root shells will auto-switch to $target_user"
     if has_cmd runuser; then
       runuser -u "$username" -- "$@"
     else
