@@ -958,77 +958,126 @@ clone_or_update_repo() {
 setup_root_handoff() {
   require_root
   local target_user=${1:-coder}
-  local target_dir=${2:-/home/$target_user}
+  local target_home=${2:-/home/$target_user}
   local target_shell=${3:-/usr/bin/zsh}
-  
-  log_info "Setting up root-to-$target_user shell handoff"
-  
-  # The simplest approach: add the handoff to /root/.bashrc and /root/.zshrc
-  # These get sourced for interactive login shells
-  
-  # For bash
-  if [[ ! -f /root/.bashrc ]]; then
-    touch /root/.bashrc
-  fi
-  if ! grep -q 'CODER_HANDOFF' /root/.bashrc 2>/dev/null; then
-    cat >>/root/.bashrc <<'BASHRC_HOOK'
+  local handoff_dir="/usr/local/lib/coder"
+  local handoff_script="${handoff_dir}/root-handoff.sh"
+  local -r hook_start="# >>> coder root handoff >>>"
+  local -r hook_end="# <<< coder root handoff <<<"
 
-# Coder root handoff
-if [ "$(id -u)" -eq 0 ] && [ -z "${CODER_HANDOFF:-}" ]; then
-  # Skip handoff for non-interactive shells
-  if [ -z "$PS1" ]; then
-    return 0 2>/dev/null || exit 0
+  if ! getent passwd "$target_user" >/dev/null 2>&1; then
+    die "setup_root_handoff: target user '$target_user' does not exist"
   fi
-  # Skip if parent is a service
-  ppid=$PPID
-  if command -v ps >/dev/null 2>&1; then
-    pcomm=$(ps -o comm= -p "$ppid" 2>/dev/null || true)
-    case "$pcomm" in
-      *coder*|sshd|*systemd*|docker*) return 0 2>/dev/null || exit 0 ;;
-    esac
-  fi
-  # Skip if SSH command execution
-  [ -n "${SSH_ORIGINAL_COMMAND:-}" ] && return 0 2>/dev/null || exit 0
-  
-  export CODER_HANDOFF=1
-  cd /home/coder 2>/dev/null || true
-  exec su - coder -s /bin/zsh
-fi
-BASHRC_HOOK
-  fi
-  
-  # For zsh
-  if [[ ! -f /root/.zshrc ]]; then
-    touch /root/.zshrc
-  fi
-  if ! grep -q 'CODER_HANDOFF' /root/.zshrc 2>/dev/null; then
-    cat >>/root/.zshrc <<'ZSHRC_HOOK'
 
-# Coder root handoff
-if [ "$(id -u)" -eq 0 ] && [ -z "${CODER_HANDOFF:-}" ]; then
-  # Skip handoff for non-interactive shells
-  if [ -z "$PS1" ]; then
-    return 0 2>/dev/null || exit 0
-  fi
-  # Skip if parent is a service
-  ppid=$PPID
-  if command -v ps >/dev/null 2>&1; then
-    pcomm=$(ps -o comm= -p "$ppid" 2>/dev/null || true)
-    case "$pcomm" in
-      *coder*|sshd|*systemd*|docker*) return 0 2>/dev/null || exit 0 ;;
-    esac
-  fi
-  # Skip if SSH command execution
-  [ -n "${SSH_ORIGINAL_COMMAND:-}" ] && return 0 2>/dev/null || exit 0
-  
-  export CODER_HANDOFF=1
-  cd /home/coder 2>/dev/null || true
-  exec su - coder -s /bin/zsh
+  mkdir -p "$handoff_dir"
+
+  local escaped_user escaped_home escaped_shell
+  escaped_user=$(printf '%q' "$target_user")
+  escaped_home=$(printf '%q' "$target_home")
+  escaped_shell=$(printf '%q' "$target_shell")
+
+  log_info "Writing root handoff helper script to $handoff_script"
+  cat >"$handoff_script" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET_USER=$escaped_user
+TARGET_HOME=$escaped_home
+TARGET_SHELL=$escaped_shell
+
+if [[ \\${CODER_ALLOW_ROOT:-0} == 1 ]]; then
+  exit 0
 fi
-ZSHRC_HOOK
-  fi
-  
-  log_info "Root handoff configured in .bashrc and .zshrc; interactive root logins will auto-switch to $target_user"
+
+if [[ \\$(id -u) -ne 0 ]]; then
+  exit 0
+fi
+
+if [[ -n "\\${IN_CODER_ROOT_HANDOFF:-}" ]]; then
+  exit 0
+fi
+
+if ! tty -s; then
+  exit 0
+fi
+
+case "\\$-" in
+  *i*) ;;
+  *) exit 0 ;;
+esac
+
+if [[ -n "\\${SSH_ORIGINAL_COMMAND:-}" ]]; then
+  exit 0
+fi
+
+export IN_CODER_ROOT_HANDOFF=1
+cd "\\$TARGET_HOME" 2>/dev/null || true
+exec su - "\\$TARGET_USER" -s "\\$TARGET_SHELL"
+EOF
+
+  chmod 755 "$handoff_script"
+  chown root:root "$handoff_script" 2>/dev/null || true
+
+  log_info "Installing root handoff hooks for $target_user"
+
+  local install_hook
+  install_hook() {
+    local rc_file=$1
+    local shell_name=$2
+    [[ -n "$rc_file" ]] || return 0
+
+    mkdir -p "$(dirname "$rc_file")"
+    touch "$rc_file"
+
+    local tmp
+
+    tmp=$(mktemp)
+    awk -v start="$hook_start" -v end="$hook_end" '
+      $0 == start {skip=1; next}
+      $0 == end {skip=0; next}
+      skip {next}
+      {print}
+    ' "$rc_file" >"$tmp" && mv "$tmp" "$rc_file"
+
+    tmp=$(mktemp)
+    awk '
+      BEGIN {skip=0; depth=0}
+      /^# Coder root handoff$/ {skip=1; depth=0; next}
+      skip {
+        if ($0 ~ /\<if\>/) { depth++ }
+        if ($0 ~ /\<fi\>/) {
+          if (depth == 0) { skip=0; next }
+          depth--
+          next
+        }
+        next
+      }
+      {print}
+    ' "$rc_file" >"$tmp" && mv "$tmp" "$rc_file"
+
+    if [[ -s "$rc_file" ]]; then
+      if [[ $(tail -c1 "$rc_file" 2>/dev/null || printf '\n') != $'\n' ]]; then
+        printf '\n' >>"$rc_file"
+      fi
+    fi
+
+    {
+      printf '%s\n' "$hook_start"
+      printf 'if [ -f "%s" ]; then\n' "$handoff_script"
+      printf '  . "%s"\n' "$handoff_script"
+      printf 'fi\n'
+      printf '%s\n' "$hook_end"
+    } >>"$rc_file"
+
+    log_info "Root handoff hook ensured in $rc_file ($shell_name)"
+  }
+
+  install_hook /root/.bashrc bash
+  install_hook /root/.bash_profile bash
+  install_hook /root/.profile profile
+  install_hook /root/.zshrc zsh
+
+  log_info "Root handoff configured; interactive root shells will exec $target_user"
 }
 
 set_zsh_theme() {
