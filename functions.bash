@@ -975,75 +975,82 @@ setup_root_handoff() {
   local target_user=${1:-coder}
   local target_dir=${2:-/home/$target_user}
   local target_shell=${3:-/usr/bin/zsh}
-  
+
   log_info "Setting up root-to-$target_user shell handoff"
-  
-  # The simplest approach: add the handoff to /root/.bashrc and /root/.zshrc
-  # These get sourced for interactive login shells
-  
-  # For bash
-  if [[ ! -f /root/.bashrc ]]; then
-    touch /root/.bashrc
-  fi
-  if ! grep -q 'CODER_HANDOFF' /root/.bashrc 2>/dev/null; then
-    cat >>/root/.bashrc <<'BASHRC_HOOK'
 
-# Coder root handoff
-if [ "$(id -u)" -eq 0 ] && [ -z "${CODER_HANDOFF:-}" ]; then
-  # Skip handoff for non-interactive shells
-  if [ -z "$PS1" ]; then
-    return 0 2>/dev/null || exit 0
-  fi
-  # Skip if parent is a service
-  ppid=$PPID
-  if command -v ps >/dev/null 2>&1; then
-    pcomm=$(ps -o comm= -p "$ppid" 2>/dev/null || true)
-    case "$pcomm" in
-      *coder*|sshd|*systemd*|docker*) return 0 2>/dev/null || exit 0 ;;
-    esac
-  fi
-  # Skip if SSH command execution
-  [ -n "${SSH_ORIGINAL_COMMAND:-}" ] && return 0 2>/dev/null || exit 0
-  
-  export CODER_HANDOFF=1
-  cd /home/coder 2>/dev/null || true
-  exec su - coder -s /bin/zsh
-fi
-BASHRC_HOOK
-  fi
-  
-  # For zsh
-  if [[ ! -f /root/.zshrc ]]; then
-    touch /root/.zshrc
-  fi
-  if ! grep -q 'CODER_HANDOFF' /root/.zshrc 2>/dev/null; then
-    cat >>/root/.zshrc <<'ZSHRC_HOOK'
+  local handoff_root=/usr/local/lib/coder
+  local handoff_script="$handoff_root/root-handoff.sh"
+  mkdir -p "$handoff_root"
 
-# Coder root handoff
-if [ "$(id -u)" -eq 0 ] && [ -z "${CODER_HANDOFF:-}" ]; then
-  # Skip handoff for non-interactive shells
-  if [ -z "$PS1" ]; then
-    return 0 2>/dev/null || exit 0
-  fi
-  # Skip if parent is a service
-  ppid=$PPID
-  if command -v ps >/dev/null 2>&1; then
-    pcomm=$(ps -o comm= -p "$ppid" 2>/dev/null || true)
-    case "$pcomm" in
-      *coder*|sshd|*systemd*|docker*) return 0 2>/dev/null || exit 0 ;;
-    esac
-  fi
-  # Skip if SSH command execution
-  [ -n "${SSH_ORIGINAL_COMMAND:-}" ] && return 0 2>/dev/null || exit 0
-  
-  export CODER_HANDOFF=1
-  cd /home/coder 2>/dev/null || true
-  exec su - coder -s /bin/zsh
+  cat >"$handoff_script" <<'HANDOFF'
+#!/bin/sh
+# Coder workspace root handoff helper
+
+TARGET_USER="TARGET_USER_PLACEHOLDER"
+TARGET_DIR="TARGET_DIR_PLACEHOLDER"
+TARGET_SHELL="TARGET_SHELL_PLACEHOLDER"
+
+if [ "$(id -u)" -ne 0 ]; then
+  exec "$TARGET_SHELL" "$@"
 fi
-ZSHRC_HOOK
+
+if [ "${CODER_ALLOW_ROOT:-0}" = "1" ]; then
+  exec "$TARGET_SHELL" "$@"
+fi
+
+if ! [ -t 0 ] || ! [ -t 1 ]; then
+  exec "$TARGET_SHELL" "$@"
+fi
+
+if command -v ps >/dev/null 2>&1; then
+  parent_comm=$(ps -o comm= -p "$PPID" 2>/dev/null || true)
+  case "$parent_comm" in
+    coder*|ssh*|systemd*|containerd*|dockerd*)
+      exec "$TARGET_SHELL" "$@"
+      ;;
+  esac
+fi
+
+if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
+  exec "$TARGET_SHELL" "$@"
+fi
+
+if [ -d "$TARGET_DIR" ]; then
+  cd "$TARGET_DIR" 2>/dev/null || true
+fi
+
+export CODER_ALLOW_ROOT=1
+exec su - "$TARGET_USER" -s "$TARGET_SHELL"
+HANDOFF
+
+  sed -i "s|TARGET_USER_PLACEHOLDER|$target_user|g" "$handoff_script"
+  sed -i "s|TARGET_DIR_PLACEHOLDER|$target_dir|g" "$handoff_script"
+  sed -i "s|TARGET_SHELL_PLACEHOLDER|$target_shell|g" "$handoff_script"
+  chmod 0755 "$handoff_script"
+
+  if ! grep -Fx "$handoff_script" /etc/shells >/dev/null 2>&1; then
+    printf '%s\n' "$handoff_script" >> /etc/shells
   fi
-  
-  log_info "Root handoff configured in .bashrc and .zshrc; interactive root logins will auto-switch to $target_user"
+
+  local hook="\n# coder root handoff\nif [ -x $handoff_script ]; then\n  exec $handoff_script \"\$@\"\nfi\n"
+  local rc_files=(
+    /root/.profile
+    /root/.bash_profile
+    /root/.bash_login
+    /root/.bashrc
+    /root/.zprofile
+    /root/.zlogin
+    /root/.zshrc
+  )
+
+  for rc in "${rc_files[@]}"; do
+    touch "$rc"
+    if ! grep -q 'coder root handoff' "$rc" 2>/dev/null; then
+      printf '%b' "$hook" >>"$rc"
+    fi
+  done
+
+  log_info "Root handoff configured; interactive root shells will auto-switch to $target_user"
 }
 
 set_zsh_theme() {
