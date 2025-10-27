@@ -961,80 +961,74 @@ setup_root_handoff() {
   local target_dir=${2:-/home/$target_user}
   local target_shell=${3:-/usr/bin/zsh}
   
-  local handoff_root=/usr/local/lib/coder
-  local handoff_script="$handoff_root/drop_root_to_$target_user.sh"
-  
   log_info "Setting up root-to-$target_user shell handoff"
-  mkdir -p "$handoff_root"
   
-  # Create the handoff wrapper script
-  cat >"$handoff_script" <<'HANDOFF_SCRIPT'
-#!/bin/sh
-# root→coder handoff wrapper
-# This script replaces root's login shell and hands off to the target user
+  # The simplest approach: add the handoff to /root/.bashrc and /root/.zshrc
+  # These get sourced for interactive login shells
+  
+  # For bash
+  if [[ ! -f /root/.bashrc ]]; then
+    touch /root/.bashrc
+  fi
+  if ! grep -q 'CODER_HANDOFF' /root/.bashrc 2>/dev/null; then
+    cat >>/root/.bashrc <<'BASHRC_HOOK'
 
-TARGET_USER="TARGET_USER_PLACEHOLDER"
-TARGET_DIR="TARGET_DIR_PLACEHOLDER"
-TARGET_SHELL="TARGET_SHELL_PLACEHOLDER"
-
-# Prevent recursive handoffs via environment variable
-if [ "${CODER_HANDOFF_DONE:-0}" = "1" ]; then
-  # Already handed off, launch the shell normally
-  exec "$TARGET_SHELL"
-fi
-
-# Skip handoff for non-interactive shells (scripts, SSH commands, etc.)
-if [ -z "$PS1" ] && [ "$1" != "-i" ] && [ "$1" != "-l" ]; then
-  # This is a non-interactive shell, don't handoff
-  exec "$TARGET_SHELL" "$@"
-fi
-
-# Check parent process - skip if invoked by coder binary or other services
-if command -v ps >/dev/null 2>&1; then
+# Coder root handoff
+if [ "$(id -u)" -eq 0 ] && [ -z "${CODER_HANDOFF:-}" ]; then
+  # Skip handoff for non-interactive shells
+  if [ -z "$PS1" ]; then
+    return 0 2>/dev/null || exit 0
+  fi
+  # Skip if parent is a service
   ppid=$PPID
-  pcomm=$(ps -o comm= -p "$ppid" 2>/dev/null || true)
-  case "$pcomm" in
-    *coder*|sshd|*systemd*) exec "$TARGET_SHELL" "$@" ;;
-  esac
-fi
-
-# Check for SSH original command - skip handoff for SSH command execution
-if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
-  exec "$TARGET_SHELL" -c "$SSH_ORIGINAL_COMMAND"
-fi
-
-# Change to target directory if available
-if [ -d "$TARGET_DIR" ]; then
-  cd "$TARGET_DIR" || true
-fi
-
-# Mark that we've done the handoff to prevent recursion
-export CODER_HANDOFF_DONE=1
-
-# Hand off to the target user's shell
-exec su - "$TARGET_USER" -s "$TARGET_SHELL"
-HANDOFF_SCRIPT
-
-  # Replace placeholders
-  sed -i "s|TARGET_USER_PLACEHOLDER|$target_user|g" "$handoff_script"
-  sed -i "s|TARGET_DIR_PLACEHOLDER|$target_dir|g" "$handoff_script"
-  sed -i "s|TARGET_SHELL_PLACEHOLDER|$target_shell|g" "$handoff_script"
-  chmod 755 "$handoff_script"
+  if command -v ps >/dev/null 2>&1; then
+    pcomm=$(ps -o comm= -p "$ppid" 2>/dev/null || true)
+    case "$pcomm" in
+      *coder*|sshd|*systemd*|docker*) return 0 2>/dev/null || exit 0 ;;
+    esac
+  fi
+  # Skip if SSH command execution
+  [ -n "${SSH_ORIGINAL_COMMAND:-}" ] && return 0 2>/dev/null || exit 0
   
-  # Replace root's shell with the handoff wrapper in /etc/passwd
-  # This way every time root logs in, the handoff runs automatically
-  if command -v usermod >/dev/null 2>&1; then
-    log_info "Setting root's shell to handoff wrapper: $handoff_script"
-    usermod -s "$handoff_script" root
-  else
-    # Fallback: edit /etc/passwd directly
-    awk -F: -v wrapper="$handoff_script" 'BEGIN{OFS=FS} /^root:/{$7=wrapper} {print}' /etc/passwd > /etc/passwd.tmp
-    mv /etc/passwd.tmp /etc/passwd
-    chmod 644 /etc/passwd
-    log_info "Updated root's shell in /etc/passwd to: $handoff_script"
+  export CODER_HANDOFF=1
+  cd /home/coder 2>/dev/null || true
+  exec su - coder -s /bin/zsh
+fi
+BASHRC_HOOK
   fi
   
-  log_info "Root handoff configured; root will auto-switch to $target_user on login"
+  # For zsh
+  if [[ ! -f /root/.zshrc ]]; then
+    touch /root/.zshrc
+  fi
+  if ! grep -q 'CODER_HANDOFF' /root/.zshrc 2>/dev/null; then
+    cat >>/root/.zshrc <<'ZSHRC_HOOK'
+
+# Coder root handoff
+if [ "$(id -u)" -eq 0 ] && [ -z "${CODER_HANDOFF:-}" ]; then
+  # Skip handoff for non-interactive shells
+  if [ -z "$PS1" ]; then
+    return 0 2>/dev/null || exit 0
+  fi
+  # Skip if parent is a service
+  ppid=$PPID
+  if command -v ps >/dev/null 2>&1; then
+    pcomm=$(ps -o comm= -p "$ppid" 2>/dev/null || true)
+    case "$pcomm" in
+      *coder*|sshd|*systemd*|docker*) return 0 2>/dev/null || exit 0 ;;
+    esac
+  fi
+  # Skip if SSH command execution
+  [ -n "${SSH_ORIGINAL_COMMAND:-}" ] && return 0 2>/dev/null || exit 0
+  
+  export CODER_HANDOFF=1
+  cd /home/coder 2>/dev/null || true
+  exec su - coder -s /bin/zsh
+fi
+ZSHRC_HOOK
+  fi
+  
+  log_info "Root handoff configured in .bashrc and .zshrc; interactive root logins will auto-switch to $target_user"
 }
 
 set_zsh_theme() {
