@@ -977,23 +977,22 @@ setup_root_handoff() {
   escaped_shell=$(printf '%q' "$target_shell")
 
   log_info "Writing root handoff helper script to $handoff_script"
-  cat >"$handoff_script" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-
-TARGET_USER=$escaped_user
-TARGET_HOME=$escaped_home
-TARGET_SHELL=$escaped_shell
-
-if [[ \\${CODER_ALLOW_ROOT:-0} == 1 ]]; then
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'set -euo pipefail\n\n'
+    printf 'TARGET_USER=%s\n' "$escaped_user"
+    printf 'TARGET_HOME=%s\n' "$escaped_home"
+    printf 'TARGET_SHELL=%s\n\n' "$escaped_shell"
+    cat <<'EOF'
+if [[ ${CODER_ALLOW_ROOT:-0} == 1 ]]; then
   exit 0
 fi
 
-if [[ \\$(id -u) -ne 0 ]]; then
+if [[ $(id -u) -ne 0 ]]; then
   exit 0
 fi
 
-if [[ -n "\\${IN_CODER_ROOT_HANDOFF:-}" ]]; then
+if [[ -n "${IN_CODER_ROOT_HANDOFF:-}" ]]; then
   exit 0
 fi
 
@@ -1001,19 +1000,20 @@ if ! tty -s; then
   exit 0
 fi
 
-case "\\$-" in
+case "$-" in
   *i*) ;;
   *) exit 0 ;;
 esac
 
-if [[ -n "\\${SSH_ORIGINAL_COMMAND:-}" ]]; then
+if [[ -n "${SSH_ORIGINAL_COMMAND:-}" ]]; then
   exit 0
 fi
 
 export IN_CODER_ROOT_HANDOFF=1
-cd "\\$TARGET_HOME" 2>/dev/null || true
-exec su - "\\$TARGET_USER" -s "\\$TARGET_SHELL"
+cd "$TARGET_HOME" 2>/dev/null || true
+exec su - "$TARGET_USER" -s "$TARGET_SHELL"
 EOF
+  } >"$handoff_script"
 
   chmod 755 "$handoff_script"
   chown root:root "$handoff_script" 2>/dev/null || true
@@ -1044,10 +1044,14 @@ EOF
       BEGIN {skip=0; depth=0}
       /^# Coder root handoff$/ {skip=1; depth=0; next}
       skip {
-        if ($0 ~ /\<if\>/) { depth++ }
-        if ($0 ~ /\<fi\>/) {
-          if (depth == 0) { skip=0; next }
-          depth--
+        if ($0 ~ /^[[:space:]]*if[[:space:](]/) { depth++ }
+        if ($0 ~ /^[[:space:]]*fi([[:space:]]|$)/) {
+          if (depth > 0) {
+            depth--
+            if (depth == 0) { skip=0; next }
+            next
+          }
+          skip=0
           next
         }
         next
@@ -1056,9 +1060,7 @@ EOF
     ' "$rc_file" >"$tmp" && mv "$tmp" "$rc_file"
 
     if [[ -s "$rc_file" ]]; then
-      if [[ $(tail -c1 "$rc_file" 2>/dev/null || printf '\n') != $'\n' ]]; then
-        printf '\n' >>"$rc_file"
-      fi
+      printf '\n' >>"$rc_file"
     fi
 
     {
