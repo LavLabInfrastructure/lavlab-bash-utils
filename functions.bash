@@ -967,140 +967,70 @@ setup_root_handoff() {
   log_info "Setting up root-to-$target_user shell handoff"
   mkdir -p "$handoff_root"
   
-  cat >"$handoff_script" <<EOF
+  cat >"$handoff_script" <<'HANDOFF_SCRIPT'
 #!/bin/sh
-# root→$target_user handoff installed by lavlab-bash-utils
-# Behavior change: only auto-handoff for interactive root shells. If the
-# session is non-interactive (scripts, daemon invocations, or explicit
-# commands like "coder"), we skip the handoff so root can run those commands.
-if [ "\$(id -u)" -ne 0 ]; then
+# root→coder handoff installed by lavlab-bash-utils
+# Only auto-handoff for interactive root shells. Skip for non-interactive 
+# sessions (scripts, commands like "coder", SSH_ORIGINAL_COMMAND invocations).
+
+if [ "$(id -u)" -ne 0 ]; then
   exit 0
 fi
-if [ "\${CODER_ROOT_HANDOFF:-0}" = "1" ]; then
+
+if [ "${CODER_ROOT_HANDOFF:-0}" = "1" ]; then
   exit 0
 fi
+
 export CODER_ROOT_HANDOFF=1
 
-# Detect interactivity: if the shell is not interactive, do not handoff.
+# Detect interactivity
 interactive=0
-case "\$-" in
+case "$-" in
   *i*) interactive=1 ;;
 esac
-if [ "\$interactive" -ne 1 ]; then
-  # If this non-interactive invocation is explicitly running 'coder' via
-  # SSH_ORIGINAL_COMMAND, allow it; otherwise skip handoff for non-interactive.
-  if [ -n "\${SSH_ORIGINAL_COMMAND:-}" ] && printf '%s' "\${SSH_ORIGINAL_COMMAND}" | grep -q 'coder'; then
-    exit 0
-  fi
+
+if [ "$interactive" -ne 1 ]; then
   exit 0
 fi
 
-# Additionally, if the invoking/parent process is a coder binary, skip the handoff.
-  if command -v ps >/dev/null 2>&1; then
-  parent_comm=$(ps -o comm= -p "\${PPID}" 2>/dev/null || true)
-  case "\${parent_comm:-}" in
+# Skip if parent process is coder binary
+if command -v ps >/dev/null 2>&1; then
+  parent_comm=$(ps -o comm= -p "$PPID" 2>/dev/null || true)
+  case "$parent_comm" in
     *coder*) exit 0 ;;
   esac
 fi
 
-TARGET="$target_dir"
-SHELL_BIN="$target_shell"
-
-if [ -d "$target_dir" ]; then
-  # Launch the user's preferred shell directly and export SHELL so the environment
-  # correctly reflects the login shell (avoids SHELL being /bin/sh when using su -s).
-  exec su - "$target_user" -s "$target_shell" -c "export SHELL=\"$target_shell\"; cd \"$target_dir\" && exec \"$target_shell\" -l"
-else
-  exec su - "$target_user" -s "$target_shell" -c "export SHELL=\"$target_shell\"; exec \"$target_shell\" -l"
+# Skip if invoked via SSH with explicit command
+if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
+  exit 0
 fi
-EOF
+
+TARGET_USER="TARGET_USER_PLACEHOLDER"
+TARGET_DIR="TARGET_DIR_PLACEHOLDER"
+TARGET_SHELL="TARGET_SHELL_PLACEHOLDER"
+
+if [ -d "$TARGET_DIR" ]; then
+  cd "$TARGET_DIR" || true
+fi
+
+exec su - "$TARGET_USER" -s "$TARGET_SHELL"
+HANDOFF_SCRIPT
+
+  # Replace placeholders in the script
+  sed -i "s|TARGET_USER_PLACEHOLDER|$target_user|g" "$handoff_script"
+  sed -i "s|TARGET_DIR_PLACEHOLDER|$target_dir|g" "$handoff_script"
+  sed -i "s|TARGET_SHELL_PLACEHOLDER|$target_shell|g" "$handoff_script"
   chmod 755 "$handoff_script"
   
-  # Global profile hook
-  cat >/etc/profile.d/zz-coder-root.sh <<EOF
-#!/bin/sh
-if [ "\$(id -u)" -eq 0 ] && [ -x "$handoff_script" ]; then
-  exec "$handoff_script"
+  # Install profile hook for all shells (sh/bash/zsh/ksh)
+  cat >/etc/profile.d/99-coder-handoff.sh <<'PROFILE_HOOK'
+# Coder root handoff hook
+if [ "$(id -u)" -eq 0 ] && [ -x /usr/local/lib/coder/drop_root_to_coder.sh ]; then
+  exec /usr/local/lib/coder/drop_root_to_coder.sh
 fi
-EOF
-  chmod 755 /etc/profile.d/zz-coder-root.sh
-  
-  # sh/dash ENV hook
-  if ! grep -q 'CODER root handoff' /etc/profile 2>/dev/null; then
-    cat >>/etc/profile <<'EOF'
-
-# CODER root handoff
-if [ "$(id -u)" -eq 0 ]; then
-  export ENV=/root/.shrc
-fi
-EOF
-  fi
-  
-  cat >/root/.shrc <<EOF
-# CODER root handoff
-if [ "\$(id -u)" -eq 0 ] && [ -x "$handoff_script" ]; then
-  exec "$handoff_script"
-fi
-EOF
-  
-  # bash
-  if [[ -f /etc/bash.bashrc ]]; then
-    [[ ! -f /etc/bash.bashrc.bak ]] && cp /etc/bash.bashrc /etc/bash.bashrc.bak
-    if ! grep -q "$handoff_script" /etc/bash.bashrc 2>/dev/null; then
-      cat >/etc/bash.bashrc <<EOF
-# CODER root handoff
-if [ "\$(id -u)" -eq 0 ] && [ -x "$handoff_script" ]; then
-  exec "$handoff_script"
-fi
-
-# original /etc/bash.bashrc follows
-EOF
-      cat /etc/bash.bashrc.bak >>/etc/bash.bashrc 2>/dev/null || true
-    fi
-  fi
-  
-  # zsh
-  mkdir -p /etc/zsh
-  if ! grep -q "$handoff_script" /etc/zsh/zshenv 2>/dev/null; then
-    cat >/etc/zsh/zshenv <<EOF
-# CODER root handoff
-if [ "\$(id -u)" -eq 0 ] && [ -x "$handoff_script" ]; then
-  exec "$handoff_script"
-fi
-EOF
-  fi
-  
-  # csh/tcsh
-  for csh_file in /etc/csh.cshrc /etc/csh.login /etc/tcshrc; do
-    if [[ -f "$csh_file" ]]; then
-      if ! grep -q "$handoff_script" "$csh_file" 2>/dev/null; then
-        cat >>"$csh_file" <<EOF
-
-# CODER root handoff
-if ( \$uid == 0 ) then
-  exec $handoff_script
-endif
-EOF
-      fi
-    else
-      cat >"$csh_file" <<EOF
-# CODER root handoff
-if ( \$uid == 0 ) then
-  exec $handoff_script
-endif
-EOF
-    fi
-  done
-  
-  # Root shell rc files as backup
-  for f in /root/.profile /root/.bash_profile /root/.bashrc /root/.zlogin /root/.zprofile /root/.zshrc /root/.cshrc /root/.tcshrc; do
-    cat >"$f" <<EOF
-# CODER root handoff (backup stub)
-if [ "\$(id -u)" -eq 0 ] && [ -x "$handoff_script" ]; then
-  exec "$handoff_script"
-fi
-EOF
-  done
+PROFILE_HOOK
+  chmod 755 /etc/profile.d/99-coder-handoff.sh
   
   log_info "Root handoff configured; root shells will auto-switch to $target_user"
 }
