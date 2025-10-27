@@ -43,6 +43,7 @@ main() {
   done
 
   local username=${1:-coder}
+  log_info "Configuring root handoff to $2"
   local target_dir=${2:-/home/$username}
   local shell=${3:-/usr/bin/zsh}
 
