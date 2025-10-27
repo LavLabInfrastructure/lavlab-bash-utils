@@ -1012,8 +1012,8 @@ if [[ -n "${SSH_ORIGINAL_COMMAND:-}" ]]; then
 fi
 
 export IN_CODER_ROOT_HANDOFF=1
-cd "$TARGET_HOME" 2>/dev/null || true
 exec su - "$TARGET_USER" -s "$TARGET_SHELL"
+cd "$TARGET_HOME" 2>/dev/null || true
 EOF
   } >"$handoff_script"
 
