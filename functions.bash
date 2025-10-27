@@ -1020,7 +1020,6 @@ EOF
 
   log_info "Installing root handoff hooks for $target_user"
 
-  local install_hook
   install_hook() {
     local rc_file=$1
     local shell_name=$2
