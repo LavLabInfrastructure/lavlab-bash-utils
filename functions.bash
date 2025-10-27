@@ -967,88 +967,74 @@ setup_root_handoff() {
   log_info "Setting up root-to-$target_user shell handoff"
   mkdir -p "$handoff_root"
   
+  # Create the handoff wrapper script
   cat >"$handoff_script" <<'HANDOFF_SCRIPT'
 #!/bin/sh
-# root→coder handoff installed by lavlab-bash-utils
-
-# Skip if already handed off
-if [ "${CODER_ROOT_HANDOFF:-0}" = "1" ]; then
-  return 0 2>/dev/null || exit 0
-fi
-
-# Skip if not root
-if [ "$(id -u)" -ne 0 ]; then
-  exit 0
-fi
-
-# Mark that we're handing off to avoid infinite loops
-export CODER_ROOT_HANDOFF=1
-
-# Detect interactivity - if not interactive, don't handoff
-case "$-" in
-  *i*) ;;
-  *) exit 0 ;;
-esac
-
-# Skip if parent process is coder binary
-if command -v ps >/dev/null 2>&1; then
-  parent_comm=$(ps -o comm= -p "$PPID" 2>/dev/null || true)
-  case "$parent_comm" in
-    *coder*) exit 0 ;;
-  esac
-fi
-
-# Skip if invoked via SSH with explicit command
-if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
-  exit 0
-fi
+# root→coder handoff wrapper
+# This script replaces root's login shell and hands off to the target user
 
 TARGET_USER="TARGET_USER_PLACEHOLDER"
 TARGET_DIR="TARGET_DIR_PLACEHOLDER"
 TARGET_SHELL="TARGET_SHELL_PLACEHOLDER"
 
-# Change to target directory if it exists
+# Prevent recursive handoffs via environment variable
+if [ "${CODER_HANDOFF_DONE:-0}" = "1" ]; then
+  # Already handed off, launch the shell normally
+  exec "$TARGET_SHELL"
+fi
+
+# Skip handoff for non-interactive shells (scripts, SSH commands, etc.)
+if [ -z "$PS1" ] && [ "$1" != "-i" ] && [ "$1" != "-l" ]; then
+  # This is a non-interactive shell, don't handoff
+  exec "$TARGET_SHELL" "$@"
+fi
+
+# Check parent process - skip if invoked by coder binary or other services
+if command -v ps >/dev/null 2>&1; then
+  ppid=$PPID
+  pcomm=$(ps -o comm= -p "$ppid" 2>/dev/null || true)
+  case "$pcomm" in
+    *coder*|sshd|*systemd*) exec "$TARGET_SHELL" "$@" ;;
+  esac
+fi
+
+# Check for SSH original command - skip handoff for SSH command execution
+if [ -n "${SSH_ORIGINAL_COMMAND:-}" ]; then
+  exec "$TARGET_SHELL" -c "$SSH_ORIGINAL_COMMAND"
+fi
+
+# Change to target directory if available
 if [ -d "$TARGET_DIR" ]; then
   cd "$TARGET_DIR" || true
 fi
 
-# Hand off to the target user with their shell
+# Mark that we've done the handoff to prevent recursion
+export CODER_HANDOFF_DONE=1
+
+# Hand off to the target user's shell
 exec su - "$TARGET_USER" -s "$TARGET_SHELL"
 HANDOFF_SCRIPT
 
-  # Replace placeholders in the script
+  # Replace placeholders
   sed -i "s|TARGET_USER_PLACEHOLDER|$target_user|g" "$handoff_script"
   sed -i "s|TARGET_DIR_PLACEHOLDER|$target_dir|g" "$handoff_script"
   sed -i "s|TARGET_SHELL_PLACEHOLDER|$target_shell|g" "$handoff_script"
   chmod 755 "$handoff_script"
   
-  # Install profile hook for all shells (sh/bash/zsh/ksh)
-  mkdir -p /etc/profile.d
-  cat >/etc/profile.d/99-coder-handoff.sh <<'PROFILE_HOOK'
-# Coder root handoff hook
-if [ "$(id -u)" -eq 0 ] && [ -x /usr/local/lib/coder/drop_root_to_coder.sh ]; then
-  exec /usr/local/lib/coder/drop_root_to_coder.sh
-fi
-PROFILE_HOOK
-  chmod 755 /etc/profile.d/99-coder-handoff.sh
+  # Replace root's shell with the handoff wrapper in /etc/passwd
+  # This way every time root logs in, the handoff runs automatically
+  if command -v usermod >/dev/null 2>&1; then
+    log_info "Setting root's shell to handoff wrapper: $handoff_script"
+    usermod -s "$handoff_script" root
+  else
+    # Fallback: edit /etc/passwd directly
+    awk -F: -v wrapper="$handoff_script" 'BEGIN{OFS=FS} /^root:/{$7=wrapper} {print}' /etc/passwd > /etc/passwd.tmp
+    mv /etc/passwd.tmp /etc/passwd
+    chmod 644 /etc/passwd
+    log_info "Updated root's shell in /etc/passwd to: $handoff_script"
+  fi
   
-  # Also add to root's own profile files to catch all shell types
-  for rc_file in /root/.profile /root/.bash_profile /root/.bashrc /root/.zprofile /root/.zshrc; do
-    if [[ ! -f "$rc_file" ]]; then
-      touch "$rc_file"
-    fi
-    if ! grep -q 'coder-handoff' "$rc_file" 2>/dev/null; then
-      cat >>"$rc_file" <<'ROOT_RC'
-
-# Coder root handoff
-if [ "$(id -u)" -eq 0 ] && [ -x /usr/local/lib/coder/drop_root_to_coder.sh ]; then
-  exec /usr/local/lib/coder/drop_root_to_coder.sh
-fi
-ROOT_RC
-    fi
-  done
-  
-  log_info "Root handoff configured; root shells will auto-switch to $target_user"
+  log_info "Root handoff configured; root will auto-switch to $target_user on login"
 }
 
 set_zsh_theme() {
